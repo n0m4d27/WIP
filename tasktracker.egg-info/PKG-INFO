@@ -1,24 +1,19 @@
+Metadata-Version: 2.4
+Name: tasktracker
+Version: 0.1.0
+Summary: Desktop task tracking app (WIP)
+Requires-Python: <3.12,>=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: SQLAlchemy<3,>=2.0
+Requires-Dist: alembic<2,>=1.13
+Requires-Dist: PySide6<7,>=6.6
+Requires-Dist: openpyxl<4,>=3.1
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8; extra == "dev"
+Dynamic: license-file
+
 # WIP - Python Task Tracking App
-
-Python **3.11.x** desktop task tracker (PySide6 + SQLite). No web server.
-
-## Run
-
-```powershell
-# From repo root (PowerShell: use `;` instead of `&&` if you are on Windows PowerShell 5.1)
-Set-Location c:\CProj\WIP
-py -3.11 -m pip install -e ".[dev]"
-py -3.11 -m tasktracker
-```
-
-- Database file: `%USERPROFILE%\.wip_tasktracker\tasks.db` unless `WIP_DB_PATH` is set to another path.
-
-## Tests
-
-```powershell
-Set-Location c:\CProj\WIP
-py -3.11 -m pytest tests -v --tb=short
-```
 
 Planning workspace for a Python 3.11.2 work task tracking application with:
 - task lifecycle dates (received, due, closed)
