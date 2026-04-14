@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><style>
+body { font-family: Segoe UI, sans-serif; line-height: 1.45; max-width: 42em; margin: 1em; }
+h1 { font-size: 1.25em; }
+h2 { font-size: 1.05em; margin-top: 1.2em; border-bottom: 1px solid #ccc; }
+code { background: #f0f0f0; padding: 0 0.2em; }
+ul { padding-left: 1.2em; }
+</style></head>
+<body>
+
+<h1>Task Tracker — application guide</h1>
+
+<p>This guide ships with the app and is read-only. Use <b>Help → User guide</b>, tab <b>My notes</b>, for your own conventions (what goes in each field).</p>
+
+<h2>Tasks</h2>
+<ul>
+<li><b>New task</b> — toolbar or <b>File</b> flow; set title, received date, due date.</li>
+<li><b>Save task</b> — persists the right-hand detail form (title, description, status, impact/urgency, dates).</li>
+<li><b>Close task</b> — sets status closed and runs <b>on-close recurrence</b> if configured.</li>
+<li><b>Impact / Urgency / Priority</b> — priority is computed (ServiceNow-style matrix). Use <b>Priority matrix…</b> on the toolbar to pick impact/urgency pairs. Changing I or U writes audit entries and a system note when priority changes.</li>
+<li><b>Statuses</b> — open, in progress, blocked, on hold, cancelled, closed.</li>
+<li><b>Next milestone</b> — derived from the first <i>open</i> todo (in list order) that has a milestone date.</li>
+</ul>
+
+<h2>Todos</h2>
+<ul>
+<li>Ordered list; <b>Up / Down</b> reorders. Completing todos refreshes next milestone.</li>
+<li>Optional <b>milestone date</b> per todo (YYYY-MM-DD when adding).</li>
+</ul>
+
+<h2>Notes</h2>
+<ul>
+<li>Rich text; <b>New note</b> / <b>Save note</b>. System notes (from priority changes) are read-only in the editor.</li>
+<li>Versions are kept when you edit a user note.</li>
+</ul>
+
+<h2>Blockers</h2>
+<ul>
+<li>Separate blocker rows; clearing a blocker may move status off <code>blocked</code> when none remain open.</li>
+</ul>
+
+<h2>Recurring</h2>
+<ul>
+<li>Enable on a task; choose <b>on close</b> vs <b>scheduled</b> (scheduled generation is stored for later automation).</li>
+<li>Template lines: <code>Title|days_after_received</code> per line for todos on the next instance.</li>
+<li>Weekend/holiday skips use <b>Holidays</b> tab and rule checkboxes.</li>
+</ul>
+
+<h2>Calendar</h2>
+<ul>
+<li>Toggles for due, milestones, received, closed; option to include closed tasks.</li>
+<li><b>Set current task due date to selected day</b> applies the calendar selection to the task selected on the Tasks tab.</li>
+<li>Legend colors; list sorted by priority within a day.</li>
+</ul>
+
+<h2>Reports &amp; export</h2>
+<ul>
+<li>Reports tab: overdue, due this week, closure velocity.</li>
+<li><b>File → Export</b> CSV or Excel.</li>
+</ul>
+
+<h2>Holidays</h2>
+<ul>
+<li>Add/remove dates; used when recurrence skips holidays (and shown on calendar when applicable).</li>
+</ul>
+
+<h2>Data &amp; security</h2>
+<ul>
+<li>Data folder: <code>app_data</code> next to the project (or <code>TASKTRACKER_DATA</code>). Contains <code>auth.json</code>, encrypted DB at rest (<code>tasks.db.enc</code>), and plaintext DB only while running.</li>
+<li>Master password on launch; backup <code>app_data</code> safely.</li>
+</ul>
+
+<h2>Activity</h2>
+<ul>
+<li><b>Activity</b> on the task panel merges field audit lines and note timeline.</li>
+</ul>
+
+</body>
+</html>

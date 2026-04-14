@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import html
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, exists, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from tasktracker.db.models import (
@@ -131,6 +133,38 @@ def _note_latest_body(session: Session, note: TaskNote) -> str:
     return latest.body_html
 
 
+_HEAD_RE = re.compile(r"<head\b[^>]*>.*?</head>", re.IGNORECASE | re.DOTALL)
+_STYLE_RE = re.compile(r"<style\b[^>]*>.*?</style>", re.IGNORECASE | re.DOTALL)
+_SCRIPT_RE = re.compile(r"<script\b[^>]*>.*?</script>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def _to_plain_text(value: str | None) -> str:
+    if not value:
+        return ""
+    text = _HEAD_RE.sub(" ", value)
+    text = _STYLE_RE.sub(" ", text)
+    text = _SCRIPT_RE.sub(" ", text)
+    text = html.unescape(text)
+    text = _TAG_RE.sub(" ", text)
+    text = _WS_RE.sub(" ", text).strip()
+    return text
+
+
+def _clip(text: str, limit: int = 120) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _format_audit_value(field_name: str, raw: str | None) -> str:
+    if raw is None:
+        return "None"
+    if field_name in {"description"}:
+        plain = _to_plain_text(raw)
+        return _clip(plain) if plain else "(empty)"
+    return _clip(raw)
+
+
 @dataclass
 class TimelineEntry:
     at: dt.datetime
@@ -139,9 +173,19 @@ class TimelineEntry:
     detail: str | None = None
 
 
+def _like_pattern(needle: str) -> str:
+    cleaned = "".join(c for c in needle.lower() if c not in "%_\\")
+    return f"%{cleaned}%"
+
+
 class TaskService:
     def __init__(self, session: Session):
         self.session = session
+
+    def _next_ticket_number(self) -> int:
+        self.session.flush()
+        m = self.session.scalar(select(func.coalesce(func.max(Task.ticket_number), -1)))
+        return int(m) + 1
 
     def list_tasks(
         self,
@@ -158,7 +202,103 @@ class TaskService:
         if status:
             q = q.where(Task.status == status)
         # Due dates present first, then by due date, priority, title
-        q = q.order_by(Task.due_date.is_(None), Task.due_date, Task.priority, Task.title)
+        q = q.order_by(Task.ticket_number.is_(None), Task.ticket_number, Task.due_date.is_(None), Task.due_date, Task.priority, Task.title)
+        return list(self.session.scalars(q).unique().all())
+
+    def search_tasks(
+        self,
+        needle: str,
+        *,
+        fields: set[str],
+        include_closed: bool = True,
+    ) -> list[Task]:
+        raw = needle.strip()
+        if not raw:
+            return self.list_tasks(include_closed=include_closed)
+        pat = _like_pattern(raw)
+        conds: list = []
+
+        if "title" in fields:
+            conds.append(func.lower(Task.title).like(pat))
+        if "description" in fields:
+            conds.append(func.lower(Task.description).like(pat))
+        if "notes" in fields:
+            conds.append(
+                exists(
+                    select(1)
+                    .select_from(TaskNote)
+                    .join(TaskNoteVersion, TaskNoteVersion.note_id == TaskNote.id)
+                    .where(TaskNote.task_id == Task.id)
+                    .where(func.lower(TaskNoteVersion.body_html).like(pat))
+                )
+            )
+        if "todos" in fields:
+            conds.append(
+                exists(
+                    select(1)
+                    .select_from(TodoItem)
+                    .where(TodoItem.task_id == Task.id)
+                    .where(func.lower(TodoItem.title).like(pat))
+                )
+            )
+        if "blockers" in fields:
+            conds.append(
+                exists(
+                    select(1)
+                    .select_from(TaskBlocker)
+                    .where(TaskBlocker.task_id == Task.id)
+                    .where(
+                        or_(
+                            func.lower(TaskBlocker.title).like(pat),
+                            func.lower(TaskBlocker.reason).like(pat),
+                        )
+                    )
+                )
+            )
+        if "audit" in fields:
+            conds.append(
+                exists(
+                    select(1)
+                    .select_from(TaskUpdateLog)
+                    .where(TaskUpdateLog.task_id == Task.id)
+                    .where(
+                        or_(
+                            func.lower(TaskUpdateLog.field_name).like(pat),
+                            func.lower(TaskUpdateLog.old_value).like(pat),
+                            func.lower(TaskUpdateLog.new_value).like(pat),
+                        )
+                    )
+                )
+            )
+        if "ticket" in fields:
+            tq = raw.upper().lstrip()
+            if tq.startswith("T") and tq[1:].isdigit():
+                conds.append(Task.ticket_number == int(tq[1:]))
+            elif raw.isdigit():
+                conds.append(Task.ticket_number == int(raw))
+
+        if not conds:
+            return []
+
+        q = (
+            select(Task)
+            .where(or_(*conds))
+            .options(
+                selectinload(Task.todos),
+                selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
+            )
+            .distinct()
+        )
+        if not include_closed:
+            q = q.where(Task.status != TaskStatus.CLOSED)
+        q = q.order_by(
+            Task.ticket_number.is_(None),
+            Task.ticket_number,
+            Task.due_date.is_(None),
+            Task.due_date,
+            Task.priority,
+            Task.title,
+        )
         return list(self.session.scalars(q).unique().all())
 
     def get_task(self, task_id: int) -> Task | None:
@@ -186,7 +326,9 @@ class TaskService:
         urgency: int = 2,
     ) -> Task:
         pr = compute_priority(impact=impact, urgency=urgency)
+        ticket_number = self._next_ticket_number()
         task = Task(
+            ticket_number=ticket_number,
             title=title.strip(),
             description=description,
             status=status,
@@ -200,6 +342,7 @@ class TaskService:
         self.session.flush()
         _log_change(self.session, task.id, "title", None, task.title)
         _log_change(self.session, task.id, "status", None, task.status)
+        _log_change(self.session, task.id, "ticket_number", None, str(task.ticket_number))
         refresh_next_milestone(self.session, task)
         self.session.commit()
         self.session.refresh(task)
@@ -320,7 +463,9 @@ class TaskService:
             skip_holidays=rule.skip_holidays,
         )
         pr = compute_priority(impact=closed.impact, urgency=closed.urgency)
+        tn = self._next_ticket_number()
         nt = Task(
+            ticket_number=tn,
             title=closed.title,
             description=closed.description,
             status=TaskStatus.OPEN,
@@ -334,6 +479,7 @@ class TaskService:
         self.session.add(nt)
         self.session.flush()
         _log_change(self.session, nt.id, "title", None, nt.title)
+        _log_change(self.session, nt.id, "ticket_number", None, str(nt.ticket_number))
         _log_change(self.session, nt.id, "created_from_recurring", None, str(closed.id))
 
         for tmpl in sorted(rule.todo_templates, key=lambda t: t.sort_order):
@@ -530,23 +676,26 @@ class TaskService:
         )
         entries: list[TimelineEntry] = []
         for log in logs:
+            old_v = _format_audit_value(log.field_name, log.old_value)
+            new_v = _format_audit_value(log.field_name, log.new_value)
             entries.append(
                 TimelineEntry(
                     at=log.changed_at,
                     kind="audit",
-                    summary=f"{log.field_name}: {log.old_value!r} → {log.new_value!r}",
+                    summary=f"{log.field_name}: {old_v} -> {new_v}",
                 )
             )
         for note in notes:
             for v in sorted(note.versions, key=lambda x: x.version_seq):
                 kind: Literal["note", "note_edit"] = "note" if v.version_seq == 1 else "note_edit"
                 prefix = "[System] " if note.is_system else ""
+                detail = _clip(_to_plain_text(v.body_html), limit=200)
                 entries.append(
                     TimelineEntry(
                         at=v.created_at,
                         kind=kind,
                         summary=f"{prefix}Note v{v.version_seq}",
-                        detail=v.body_html[:200] + ("…" if len(v.body_html) > 200 else ""),
+                        detail=detail,
                     )
                 )
         entries.sort(key=lambda e: e.at)
@@ -634,6 +783,7 @@ class TaskService:
             w.writerow(
                 [
                     "id",
+                    "ticket_number",
                     "title",
                     "status",
                     "impact",
@@ -649,6 +799,7 @@ class TaskService:
                 w.writerow(
                     [
                         t.id,
+                        t.ticket_number,
                         t.title,
                         t.status,
                         t.impact,
@@ -670,6 +821,7 @@ class TaskService:
         ws.title = "Tasks"
         headers = [
             "id",
+            "ticket_number",
             "title",
             "status",
             "impact",
@@ -685,6 +837,7 @@ class TaskService:
             ws.append(
                 [
                     t.id,
+                    t.ticket_number,
                     t.title,
                     t.status,
                     t.impact,

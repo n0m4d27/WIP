@@ -130,6 +130,10 @@ Field names from Access are inputs only; schema uses Pythonic consistency:
 - Integration tests for task close + next-task generation (both trigger modes where applicable).
 - Integration tests for application services and UI adapters (**no HTTP server**).
 
+## Documentation and in-app help
+- **Feature documentation:** Whenever behavior or UI is added or materially changed, update the shipped **user guide** (`tasktracker/resources/user_guide.html`) so Help → **User guide** stays accurate. Treat it as part of the same change as the feature (same PR / same release habit).
+- **Personal usage notes:** End users maintain **`app_data/personal_usage.html`** via Help → User guide → **My notes** (rich text, explicit Save). That file is for private conventions (what goes in each field, naming patterns, workflow tweaks) and is not bundled with the app—it lives only in the data directory.
+
 ## Deferred Decisions
 - Authentication/authorization model (single-user desktop may stay minimal).
 - Notification delivery channel (email/Teams/etc.).

@@ -1,0 +1,10 @@
+# Local app data (encrypted DB, auth salts — do not commit)
+app_data/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.eggs/
+*.egg-info/
+dist/
+build/

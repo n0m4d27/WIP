@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -10,17 +9,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from tasktracker.db.models import Base
 
 
-def default_db_path() -> Path:
-    raw = os.environ.get("WIP_DB_PATH")
-    if raw:
-        return Path(raw).expanduser().resolve()
-    return Path.home() / ".wip_tasktracker" / "tasks.db"
-
-
-def get_engine(db_path: Path | None = None) -> Engine:
-    path = db_path or default_db_path()
+def get_engine(db_path: Path) -> Engine:
+    path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    url = f"sqlite:///{path.as_posix()}"
+    url = f"sqlite:///{path.resolve().as_posix()}"
     return create_engine(url, echo=False, future=True)
 
 

@@ -65,3 +65,27 @@ def test_close_idempotent_no_double_spawn(svc: TaskService) -> None:
     assert n1 is not None
     _, n2 = svc.close_task(t.id)
     assert n2 is None
+
+
+def test_ticket_numbers_increment_from_zero(svc: TaskService) -> None:
+    t0 = svc.create_task(title="One", received_date=dt.date(2026, 5, 1))
+    t1 = svc.create_task(title="Two", received_date=dt.date(2026, 5, 2))
+    assert t0.ticket_number == 0
+    assert t1.ticket_number == 1
+
+
+def test_search_title_notes_and_ticket(svc: TaskService) -> None:
+    a = svc.create_task(title="Network outage", received_date=dt.date(2026, 6, 1))
+    b = svc.create_task(title="Printer", received_date=dt.date(2026, 6, 2))
+    assert a.ticket_number == 0
+    assert b.ticket_number == 1
+    svc.add_note(b.id, body_html="<p>Investigate VLAN edge case</p>")
+
+    by_title = svc.search_tasks("outage", fields={"title"})
+    assert [t.id for t in by_title] == [a.id]
+
+    by_note = svc.search_tasks("vlan", fields={"notes"})
+    assert [t.id for t in by_note] == [b.id]
+
+    by_ticket_prefixed = svc.search_tasks("T1", fields={"ticket"})
+    assert [t.id for t in by_ticket_prefixed] == [b.id]

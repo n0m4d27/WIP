@@ -41,8 +41,12 @@ from sqlalchemy.orm import joinedload
 from tasktracker.db.models import TaskNote
 from tasktracker.domain.enums import RecurrenceGenerationMode, TaskStatus
 from tasktracker.domain.priority import compute_priority, priority_display
+from tasktracker.domain.ticket import format_task_ticket
 from tasktracker.services.task_service import TaskService
+from tasktracker.ui.date_widgets import date_edit_with_today_button
 from tasktracker.ui.priority_matrix_dialog import PriorityMatrixDialog
+from tasktracker.ui.todo_dialog import run_add_todo_dialog
+from tasktracker.ui.user_guide_dialog import run_user_guide_dialog
 
 
 def _qdate_to_py(qd: QDate) -> dt.date:
@@ -54,11 +58,20 @@ def _py_to_qdate(d: dt.date) -> QDate:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, session_factory, parent=None) -> None:
+    def __init__(
+        self,
+        session_factory,
+        *,
+        engine=None,
+        secure_shutdown=None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Task Tracker (WIP)")
         self.resize(1100, 720)
 
+        self._engine = engine
+        self._secure_shutdown = secure_shutdown
         self._session_factory = session_factory
         self._session = session_factory()
         self._svc = TaskService(self._session)
@@ -96,6 +109,8 @@ class MainWindow(QMainWindow):
         m_file.addAction("Quit", self.close)
 
         m_help = self.menuBar().addMenu("&Help")
+        m_help.addAction("User guide…", self._show_user_guide)
+        m_help.addSeparator()
         m_help.addAction("About", self._about)
 
     def _build_ui(self) -> None:
@@ -113,6 +128,42 @@ class MainWindow(QMainWindow):
 
         left = QWidget()
         ll = QVBoxLayout(left)
+        search_box = QGroupBox("Search")
+        sl = QVBoxLayout(search_box)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search…")
+        self.search_edit.returnPressed.connect(self._reload_task_list)
+        sl.addWidget(self.search_edit)
+        chk_row = QHBoxLayout()
+        self.search_title = QCheckBox("Title")
+        self.search_title.setChecked(True)
+        self.search_description = QCheckBox("Description")
+        self.search_notes = QCheckBox("Notes")
+        self.search_todos = QCheckBox("Todos")
+        self.search_blockers = QCheckBox("Blockers")
+        self.search_audit = QCheckBox("Audit")
+        self.search_ticket = QCheckBox("Ticket (T12 or 12)")
+        for c in (
+            self.search_title,
+            self.search_description,
+            self.search_notes,
+            self.search_todos,
+            self.search_blockers,
+            self.search_audit,
+            self.search_ticket,
+        ):
+            chk_row.addWidget(c)
+        sl.addLayout(chk_row)
+        sbtn = QHBoxLayout()
+        self.btn_search = QPushButton("Search")
+        self.btn_search.clicked.connect(self._reload_task_list)
+        self.btn_search_clear = QPushButton("Clear")
+        self.btn_search_clear.clicked.connect(self._clear_search)
+        sbtn.addWidget(self.btn_search)
+        sbtn.addWidget(self.btn_search_clear)
+        sl.addLayout(sbtn)
+        ll.addWidget(search_box)
+
         self.chk_hide_closed = QCheckBox("Hide closed tasks")
         self.chk_hide_closed.setChecked(True)
         self.chk_hide_closed.toggled.connect(self._reload_task_list)
@@ -127,6 +178,8 @@ class MainWindow(QMainWindow):
         self.detail_widget = detail
         fl = QFormLayout(detail)
 
+        self.lbl_ticket = QLabel("—")
+        self.lbl_ticket.setStyleSheet("font-weight: bold;")
         self.f_title = QLineEdit()
         self.f_description = QTextEdit()
         self.f_description.setAcceptRichText(True)
@@ -155,25 +208,23 @@ class MainWindow(QMainWindow):
         iu_lay.addWidget(self.f_priority_label)
         iu_lay.addStretch()
 
-        self.f_received = QDateEdit()
-        self.f_received.setCalendarPopup(True)
+        recv_row, self.f_received = date_edit_with_today_button()
         self.f_received.setDate(QDate.currentDate())
-        self.f_due = QDateEdit()
-        self.f_due.setCalendarPopup(True)
+        due_row, self.f_due = date_edit_with_today_button()
         self.f_due.setSpecialValueText("")
         self.f_due.setDate(QDate.currentDate().addDays(7))
-        self.f_closed = QDateEdit()
-        self.f_closed.setCalendarPopup(True)
+        closed_row, self.f_closed = date_edit_with_today_button()
         self.f_closed.setSpecialValueText("—")
         self.f_closed.setDate(QDate.currentDate())
 
+        fl.addRow("Ticket", self.lbl_ticket)
         fl.addRow("Title", self.f_title)
         fl.addRow("Description", self.f_description)
         fl.addRow("Status", self.f_status)
         fl.addRow("I / U / P", iu_row)
-        fl.addRow("Received", self.f_received)
-        fl.addRow("Due", self.f_due)
-        fl.addRow("Closed", self.f_closed)
+        fl.addRow("Received", recv_row)
+        fl.addRow("Due", due_row)
+        fl.addRow("Closed", closed_row)
 
         self.lbl_next_ms = QLabel("—")
         fl.addRow("Next milestone", self.lbl_next_ms)
@@ -285,10 +336,19 @@ class MainWindow(QMainWindow):
         w = QWidget()
         lay = QHBoxLayout(w)
         cal_side = QVBoxLayout()
+        cal_top = QHBoxLayout()
         self.cal_widget = QCalendarWidget()
         self.cal_widget.selectionChanged.connect(self._on_calendar_date_changed)
         self.cal_widget.currentPageChanged.connect(lambda _y, _m: self._highlight_calendar_month())
-        cal_side.addWidget(self.cal_widget)
+        cal_top.addWidget(self.cal_widget, 1)
+        cal_today_col = QVBoxLayout()
+        self.btn_cal_today = QPushButton("Today")
+        self.btn_cal_today.setToolTip("Jump calendar to today")
+        self.btn_cal_today.clicked.connect(self._calendar_go_today)
+        cal_today_col.addWidget(self.btn_cal_today)
+        cal_today_col.addStretch()
+        cal_top.addLayout(cal_today_col)
+        cal_side.addLayout(cal_top)
 
         toggles = QGroupBox("Overlays")
         tg = QVBoxLayout(toggles)
@@ -338,6 +398,11 @@ class MainWindow(QMainWindow):
         self._on_calendar_date_changed()
         return w
 
+    def _calendar_go_today(self) -> None:
+        today = QDate.currentDate()
+        self.cal_widget.setSelectedDate(today)
+        self.cal_widget.setCurrentPage(today.year(), today.month())
+
     def _build_reports_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -373,20 +438,78 @@ class MainWindow(QMainWindow):
         self._reload_holidays_list()
         return w
 
-    def _reload_task_list(self) -> None:
-        self.task_list.clear()
+    def _search_field_names(self) -> set[str]:
+        m = {
+            "title": self.search_title,
+            "description": self.search_description,
+            "notes": self.search_notes,
+            "todos": self.search_todos,
+            "blockers": self.search_blockers,
+            "audit": self.search_audit,
+            "ticket": self.search_ticket,
+        }
+        return {k for k, w in m.items() if w.isChecked()}
+
+    def _tasks_for_sidebar(self):
         include_closed = not self.chk_hide_closed.isChecked()
-        for t in self._svc.list_tasks(include_closed=include_closed):
-            pr = priority_display(t.priority)
-            due = t.due_date.isoformat() if t.due_date else "no due"
-            self.task_list.addItem(f"[{pr}] {t.title} — {due} ({t.status})")
-            it = self.task_list.item(self.task_list.count() - 1)
-            it.setData(Qt.ItemDataRole.UserRole, t.id)
+        q = self.search_edit.text().strip()
+        if q:
+            fields = self._search_field_names()
+            if not fields:
+                fields = {"title"}
+            return self._svc.search_tasks(q, fields=fields, include_closed=include_closed)
+        return self._svc.list_tasks(include_closed=include_closed)
+
+    def _clear_search(self) -> None:
+        self.search_edit.clear()
+        self._reload_task_list()
+
+    def _reload_task_list(self) -> None:
+        saved_id = self._current_task_id
+        self.task_list.blockSignals(True)
+        try:
+            self.task_list.clear()
+            for t in self._tasks_for_sidebar():
+                pr = priority_display(t.priority)
+                due = t.due_date.isoformat() if t.due_date else "no due"
+                tk = format_task_ticket(t.ticket_number)
+                self.task_list.addItem(f"{tk} [{pr}] {t.title} — {due} ({t.status})")
+                it = self.task_list.item(self.task_list.count() - 1)
+                it.setData(Qt.ItemDataRole.UserRole, t.id)
+            if saved_id is not None:
+                for i in range(self.task_list.count()):
+                    it = self.task_list.item(i)
+                    if it and it.data(Qt.ItemDataRole.UserRole) == saved_id:
+                        self.task_list.setCurrentItem(it)
+                        break
+        finally:
+            self.task_list.blockSignals(False)
+        cur = self.task_list.currentItem()
+        if cur is not None and cur.data(Qt.ItemDataRole.UserRole) is not None:
+            self._current_task_id = int(cur.data(Qt.ItemDataRole.UserRole))
+            self._load_task_detail()
+        else:
+            self._current_task_id = None
+            self._blank_detail_pane()
         self._refresh_priority_label()
+
+    def _blank_detail_pane(self) -> None:
+        self.lbl_ticket.setText("—")
+        self.f_title.clear()
+        self.f_description.clear()
+        self.todo_list.clear()
+        self.note_list.clear()
+        self.note_editor.clear()
+        self.blocker_list.clear()
+        self.timeline.clear()
+        self.rec_enable.setChecked(False)
+        self.rec_template.clear()
+        self.lbl_next_ms.setText("—")
 
     def _on_task_selected(self, cur: QListWidgetItem | None, _prev: QListWidgetItem | None) -> None:
         if not cur:
             self._current_task_id = None
+            self._blank_detail_pane()
             return
         tid = cur.data(Qt.ItemDataRole.UserRole)
         self._current_task_id = int(tid) if tid is not None else None
@@ -399,6 +522,7 @@ class MainWindow(QMainWindow):
         task = self._svc.get_task(tid)
         if not task:
             return
+        self.lbl_ticket.setText(format_task_ticket(task.ticket_number))
         self.f_title.setText(task.title)
         self.f_description.setHtml(task.description or "")
         idx = self.f_status.findData(task.status)
@@ -477,10 +601,14 @@ class MainWindow(QMainWindow):
         closed = self.f_closed.date()
         closed_py = _qdate_to_py(closed) if closed.isValid() else None
         st = self.f_status.currentData()
+        desc_html = self.f_description.toHtml()
+        desc_plain = self.f_description.toPlainText().strip()
+        if not desc_plain:
+            desc_html = None
         self._svc.update_task_fields(
             self._current_task_id,
             title=self.f_title.text(),
-            description=self.f_description.toHtml(),
+            description=desc_html,
             status=st,
             impact=self.f_impact.value(),
             urgency=self.f_urgency.value(),
@@ -498,7 +626,7 @@ class MainWindow(QMainWindow):
         task, new_t = self._svc.close_task(self._current_task_id)
         msg = "Task closed."
         if new_t:
-            msg += f" Created recurring successor #{new_t.id}."
+            msg += f" Created successor {format_task_ticket(new_t.ticket_number)} (id {new_t.id})."
         QMessageBox.information(self, "Close", msg)
         self._reload_task_list()
         self._load_task_detail()
@@ -508,15 +636,13 @@ class MainWindow(QMainWindow):
         d.setWindowTitle("New task")
         form = QFormLayout(d)
         title = QLineEdit()
-        recv = QDateEdit()
-        recv.setCalendarPopup(True)
+        recv_row, recv = date_edit_with_today_button(d)
         recv.setDate(QDate.currentDate())
-        due = QDateEdit()
-        due.setCalendarPopup(True)
+        due_row, due = date_edit_with_today_button(d)
         due.setDate(QDate.currentDate().addDays(7))
         form.addRow("Title", title)
-        form.addRow("Received", recv)
-        form.addRow("Due", due)
+        form.addRow("Received", recv_row)
+        form.addRow("Due", due_row)
         bb = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -540,20 +666,11 @@ class MainWindow(QMainWindow):
     def _add_todo(self) -> None:
         if self._current_task_id is None:
             return
-        text, ok = QInputDialog.getText(self, "New todo", "Title:")
-        if not ok or not text.strip():
+        result = run_add_todo_dialog(self)
+        if result is None:
             return
-        ms_text, ok2 = QInputDialog.getText(
-            self, "Milestone date", "Milestone (YYYY-MM-DD) or empty:", text=""
-        )
-        ms: dt.date | None = None
-        if ok2 and ms_text.strip():
-            try:
-                ms = dt.date.fromisoformat(ms_text.strip())
-            except ValueError:
-                QMessageBox.warning(self, "Date", "Invalid date.")
-                return
-        self._svc.add_todo(self._current_task_id, title=text.strip(), milestone_date=ms)
+        text, ms = result
+        self._svc.add_todo(self._current_task_id, title=text, milestone_date=ms)
         self._load_task_detail()
         self._reload_task_list()
 
@@ -782,19 +899,27 @@ class MainWindow(QMainWindow):
             it.setData(Qt.ItemDataRole.UserRole, h.id)
 
     def _add_holiday_dialog(self) -> None:
-        text, ok = QInputDialog.getText(
-            self, "Holiday", "Date YYYY-MM-DD and optional label after space:"
+        d = QDialog(self)
+        d.setWindowTitle("Add holiday")
+        lay = QVBoxLayout(d)
+        form = QFormLayout()
+        date_row, de = date_edit_with_today_button(d)
+        de.setDate(QDate.currentDate())
+        label = QLineEdit()
+        form.addRow("Date", date_row)
+        form.addRow("Label (optional)", label)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        if not ok or not text.strip():
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        lay.addWidget(bb)
+        if d.exec() != QDialog.DialogCode.Accepted:
             return
-        parts = text.strip().split(None, 1)
-        try:
-            d = dt.date.fromisoformat(parts[0])
-        except ValueError:
-            QMessageBox.warning(self, "Holiday", "Invalid date.")
-            return
-        lbl = parts[1].strip() if len(parts) > 1 else None
-        if self._svc.add_holiday(d, lbl) is None:
+        hol = _qdate_to_py(de.date())
+        lbl = label.text().strip() or None
+        if self._svc.add_holiday(hol, lbl) is None:
             QMessageBox.warning(self, "Holiday", "That date already exists.")
             return
         self._reload_holidays_list()
@@ -825,6 +950,9 @@ class MainWindow(QMainWindow):
     def _show_matrix(self) -> None:
         PriorityMatrixDialog(self).exec()
 
+    def _show_user_guide(self) -> None:
+        run_user_guide_dialog(self)
+
     def _about(self) -> None:
         QMessageBox.about(
             self,
@@ -834,4 +962,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._session.close()
+        if self._secure_shutdown is not None:
+            self._secure_shutdown()
         super().closeEvent(event)

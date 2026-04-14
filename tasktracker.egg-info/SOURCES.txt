@@ -3,6 +3,7 @@ README.md
 pyproject.toml
 tasktracker/__init__.py
 tasktracker/__main__.py
+tasktracker/paths.py
 tasktracker.egg-info/PKG-INFO
 tasktracker.egg-info/SOURCES.txt
 tasktracker.egg-info/dependency_links.txt
@@ -15,10 +16,16 @@ tasktracker/db/session.py
 tasktracker/domain/__init__.py
 tasktracker/domain/enums.py
 tasktracker/domain/priority.py
+tasktracker/resources/user_guide.html
+tasktracker/security/__init__.py
+tasktracker/security/crypto.py
+tasktracker/security/password.py
 tasktracker/services/__init__.py
 tasktracker/services/task_service.py
 tasktracker/ui/__init__.py
+tasktracker/ui/auth_dialogs.py
 tasktracker/ui/main_window.py
 tasktracker/ui/priority_matrix_dialog.py
+tasktracker/ui/user_guide_dialog.py
 tests/test_priority.py
 tests/test_task_service.py
