@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tasktracker.db.schema_upgrade import upgrade_schema
 from tasktracker.db.session import get_engine, init_schema, make_session_factory
-from tasktracker.paths import get_app_data_dir
+from tasktracker.paths import default_data_dir
 from tasktracker.security.crypto import decrypt_file, encrypt_file
 from tasktracker.security.password import (
     create_auth_record,
@@ -17,12 +18,21 @@ from tasktracker.security.password import (
 )
 from tasktracker.ui.auth_dialogs import run_login_dialog, run_setup_password_dialog
 from tasktracker.ui.main_window import MainWindow
+from tasktracker.ui.vault_dialogs import run_vault_picker_dialog
 
 
 def main() -> None:
     app = QApplication(sys.argv)
 
-    data_dir = get_app_data_dir()
+    if os.environ.get("TASKTRACKER_DATA"):
+        data_dir = default_data_dir()
+        data_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        chosen = run_vault_picker_dialog(default_data_dir())
+        if chosen is None:
+            raise SystemExit(0)
+        data_dir = chosen
+
     auth_path = data_dir / "auth.json"
     db_plain = data_dir / "tasks.db"
     db_enc = data_dir / "tasks.db.enc"
@@ -40,13 +50,14 @@ def main() -> None:
         need_fresh_schema = True
     else:
         record = load_auth_record(auth_path)
-        pwd = run_login_dialog()
-        if pwd is None:
-            raise SystemExit(0)
-        if not verify_password(pwd, record):
-            QMessageBox.critical(None, "Login", "Incorrect password.")
-            raise SystemExit(1)
-        fernet = derive_fernet(pwd, record)
+        while True:
+            pwd = run_login_dialog()
+            if pwd is None:
+                raise SystemExit(0)
+            if verify_password(pwd, record):
+                fernet = derive_fernet(pwd, record)
+                break
+            QMessageBox.warning(None, "Login", "Incorrect password. Please try again.")
 
     if need_fresh_schema:
         for p in (db_plain, db_enc):

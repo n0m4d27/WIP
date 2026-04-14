@@ -11,10 +11,10 @@ py -3.11 -m pip install -e ".[dev]"
 py -3.11 -m tasktracker
 ```
 
-- **Self-contained data folder:** `app_data/` next to the project root when you run from the repo (same directory as `pyproject.toml`). Nothing is written under your user profile.
-  - `app_data/auth.json` — password verification data (salt + PBKDF2 hash; not your raw password).
-  - `app_data/tasks.db` — SQLite file **only while the app is running** (decrypted).
-  - `app_data/tasks.db.enc` — encrypted database **at rest** when the app is closed. If the app crashes while open, plaintext `tasks.db` may remain; the next launch keeps that file and refreshes the encrypted copy when you quit normally.
+- **Vault-based data folders:** each selected folder is an independent vault (its own password + encrypted DB). If `TASKTRACKER_DATA` is not set, startup prompts for vault folder (open existing / create new).
+  - `<vault>/auth.json` — password verification data (salt + PBKDF2 hash; not your raw password).
+  - `<vault>/tasks.db` — SQLite file **only while the app is running** (decrypted).
+  - `<vault>/tasks.db.enc` — encrypted database **at rest** when the app is closed. If the app crashes while open, plaintext `tasks.db` may remain; the next launch keeps that file and refreshes the encrypted copy when you quit normally.
 - **Master password:** set on first launch; required on each launch. If you forget it, the data cannot be recovered.
 - **Help → User guide:** built-in application guide (read-only) and **My notes** tab for your own field conventions; notes save to `app_data/personal_usage.html`.
 - **Override folder:** set environment variable `TASKTRACKER_DATA` to any directory path (e.g. on a NAS) to keep all of the above in that one folder.

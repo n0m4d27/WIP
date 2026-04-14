@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+import html as htmllib
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
@@ -57,6 +59,36 @@ def _py_to_qdate(d: dt.date) -> QDate:
     return QDate(d.year, d.month, d.day)
 
 
+_HEAD_RE = re.compile(r"<head\b[^>]*>.*?</head>", re.IGNORECASE | re.DOTALL)
+_STYLE_RE = re.compile(r"<style\b[^>]*>.*?</style>", re.IGNORECASE | re.DOTALL)
+_SCRIPT_RE = re.compile(r"<script\b[^>]*>.*?</script>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def _plain_from_html(value: str | None) -> str:
+    if not value:
+        return ""
+    text = _HEAD_RE.sub(" ", value)
+    text = _STYLE_RE.sub(" ", text)
+    text = _SCRIPT_RE.sub(" ", text)
+    text = htmllib.unescape(text)
+    text = _TAG_RE.sub(" ", text)
+    text = _WS_RE.sub(" ", text).strip()
+    return text
+
+
+def _clip(text: str, limit: int = 56) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _system_note_title(body_plain: str) -> str:
+    low = body_plain.lower()
+    if "priority updated automatically" in low:
+        return "Priority auto-updated"
+    return "System update"
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -85,6 +117,18 @@ class MainWindow(QMainWindow):
         self._session.close()
         self._session = self._session_factory()
         self._svc = TaskService(self._session)
+
+    @staticmethod
+    def _select_list_item_by_id(list_widget: QListWidget, item_id: int | None) -> bool:
+        """Select item in list by UserRole id; return True when found."""
+        if item_id is None:
+            return False
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == item_id:
+                list_widget.setCurrentItem(item)
+                return True
+        return False
 
     def _build_menu_toolbar(self) -> None:
         tb = QToolBar()
@@ -553,8 +597,19 @@ class MainWindow(QMainWindow):
 
         self.note_list.clear()
         for n in sorted(task.notes, key=lambda x: x.created_at):
-            tag = "(sys) " if n.is_system else ""
-            self.note_list.addItem(f"{tag}Note #{n.id}")
+            latest_body = ""
+            if n.versions:
+                latest = max(n.versions, key=lambda v: v.version_seq)
+                latest_body = _plain_from_html(latest.body_html)
+
+            if n.is_system:
+                title = _system_note_title(latest_body)
+                suffix = f" — {_clip(latest_body, 44)}" if latest_body else ""
+                label = f"(sys) {title}{suffix}"
+            else:
+                label = _clip(latest_body) if latest_body else "New note"
+
+            self.note_list.addItem(label)
             it = self.note_list.item(self.note_list.count() - 1)
             it.setData(Qt.ItemDataRole.UserRole, n.id)
             it.setData(Qt.ItemDataRole.UserRole + 1, n.is_system)
@@ -670,9 +725,11 @@ class MainWindow(QMainWindow):
         if result is None:
             return
         text, ms = result
-        self._svc.add_todo(self._current_task_id, title=text, milestone_date=ms)
+        created = self._svc.add_todo(self._current_task_id, title=text, milestone_date=ms)
         self._load_task_detail()
         self._reload_task_list()
+        if created is not None:
+            self._select_list_item_by_id(self.todo_list, created.id)
 
     def _complete_todo(self) -> None:
         it = self.todo_list.currentItem()
@@ -680,9 +737,11 @@ class MainWindow(QMainWindow):
             return
         tid = it.data(Qt.ItemDataRole.UserRole)
         if tid:
+            keep_id = int(tid)
             self._svc.complete_todo(int(tid))
             self._load_task_detail()
             self._reload_task_list()
+            self._select_list_item_by_id(self.todo_list, keep_id)
 
     def _move_todo(self, delta: int) -> None:
         it = self.todo_list.currentItem()
@@ -691,9 +750,11 @@ class MainWindow(QMainWindow):
         tid = it.data(Qt.ItemDataRole.UserRole)
         if not tid:
             return
+        keep_id = int(tid)
         row = self.todo_list.row(it)
         self._svc.reorder_todo(int(tid), row + delta)
         self._load_task_detail()
+        self._select_list_item_by_id(self.todo_list, keep_id)
 
     def _on_note_selected(self, cur: QListWidgetItem | None, _prev: QListWidgetItem | None) -> None:
         if not cur:
@@ -718,8 +779,10 @@ class MainWindow(QMainWindow):
     def _new_note(self) -> None:
         if self._current_task_id is None:
             return
-        self._svc.add_note(self._current_task_id, body_html="<p></p>", is_system=False)
+        created = self._svc.add_note(self._current_task_id, body_html="<p></p>", is_system=False)
         self._load_task_detail()
+        if created is not None:
+            self._select_list_item_by_id(self.note_list, created.id)
 
     def _save_note(self) -> None:
         it = self.note_list.currentItem()
@@ -731,7 +794,9 @@ class MainWindow(QMainWindow):
         nid = it.data(Qt.ItemDataRole.UserRole)
         if nid:
             self._svc.update_note_body(int(nid), self.note_editor.toHtml())
+            keep_id = int(nid)
             self._load_task_detail()
+            self._select_list_item_by_id(self.note_list, keep_id)
 
     def _add_blocker(self) -> None:
         if self._current_task_id is None:
@@ -741,9 +806,11 @@ class MainWindow(QMainWindow):
             return
         reason, ok2 = QInputDialog.getMultiLineText(self, "Blocker", "Reason (optional):", "")
         r = reason.strip() if ok2 else None
-        self._svc.add_blocker(self._current_task_id, title=title.strip(), reason=r or None)
+        created = self._svc.add_blocker(self._current_task_id, title=title.strip(), reason=r or None)
         self._load_task_detail()
         self._reload_task_list()
+        if created is not None:
+            self._select_list_item_by_id(self.blocker_list, created.id)
 
     def _clear_blocker(self) -> None:
         it = self.blocker_list.currentItem()
@@ -751,9 +818,11 @@ class MainWindow(QMainWindow):
             return
         bid = it.data(Qt.ItemDataRole.UserRole)
         if bid:
+            keep_id = int(bid)
             self._svc.clear_blocker(int(bid))
             self._load_task_detail()
             self._reload_task_list()
+            self._select_list_item_by_id(self.blocker_list, keep_id)
 
     def _save_recurrence(self) -> None:
         if self._current_task_id is None:
@@ -891,12 +960,17 @@ class MainWindow(QMainWindow):
         )
 
     def _reload_holidays_list(self) -> None:
+        selected = self.holiday_table.currentItem()
+        selected_id = int(selected.data(Qt.ItemDataRole.UserRole)) if selected else None
         self.holiday_table.clear()
         for h in self._svc.list_holidays():
             label = h.label or ""
             self.holiday_table.addItem(f"{h.holiday_date.isoformat()}  {label}")
             it = self.holiday_table.item(self.holiday_table.count() - 1)
             it.setData(Qt.ItemDataRole.UserRole, h.id)
+        if not self._select_list_item_by_id(self.holiday_table, selected_id):
+            if self.holiday_table.count() > 0:
+                self.holiday_table.setCurrentRow(0)
 
     def _add_holiday_dialog(self) -> None:
         d = QDialog(self)
@@ -919,10 +993,12 @@ class MainWindow(QMainWindow):
             return
         hol = _qdate_to_py(de.date())
         lbl = label.text().strip() or None
-        if self._svc.add_holiday(hol, lbl) is None:
+        created = self._svc.add_holiday(hol, lbl)
+        if created is None:
             QMessageBox.warning(self, "Holiday", "That date already exists.")
             return
         self._reload_holidays_list()
+        self._select_list_item_by_id(self.holiday_table, created.id)
 
     def _remove_holiday(self) -> None:
         it = self.holiday_table.currentItem()

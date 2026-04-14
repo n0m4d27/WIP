@@ -28,6 +28,16 @@
 - Migration tool: **Alembic**.
 - **Not in scope for v1:** shared multi-user database server; treat data as **one logical user / one file** even if the file is on NAS.
 
+## Vault and startup flow
+- App data is folder-based; each folder is a **vault** with its own `auth.json`, encrypted DB (`tasks.db.enc`), and runtime plaintext DB (`tasks.db` while running).
+- On startup, if `TASKTRACKER_DATA` is set, use that folder directly; otherwise show a **vault picker** dialog with:
+  - **Open existing vault** (choose folder)
+  - **Create new vault** (choose/create folder)
+- Each vault has its own password lifecycle:
+  - Missing `auth.json` -> set new password and initialize a fresh schema.
+  - Existing `auth.json` -> require password to unlock (incorrect password re-prompts; user can cancel to exit).
+- This design allows multiple independent task collections, each with separate password protection.
+
 ## Product decisions (confirmed)
 
 ### Task status
@@ -133,6 +143,9 @@ Field names from Access are inputs only; schema uses Pythonic consistency:
 ## Documentation and in-app help
 - **Feature documentation:** Whenever behavior or UI is added or materially changed, update the shipped **user guide** (`tasktracker/resources/user_guide.html`) so Help → **User guide** stays accurate. Treat it as part of the same change as the feature (same PR / same release habit).
 - **Personal usage notes:** End users maintain **`app_data/personal_usage.html`** via Help → User guide → **My notes** (rich text, explicit Save). That file is for private conventions (what goes in each field, naming patterns, workflow tweaks) and is not bundled with the app—it lives only in the data directory.
+
+## Interaction consistency
+- After save/update actions that refresh list-backed panes (tasks, notes, todos, blockers, holidays), the UI should preserve the previously selected item when it still exists; for newly created items, prefer selecting the new row. This is a deliberate usability rule to avoid forcing re-selection while editing.
 
 ## Deferred Decisions
 - Authentication/authorization model (single-user desktop may stay minimal).
