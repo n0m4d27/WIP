@@ -15,9 +15,7 @@ ul { padding-left: 1.2em; }
 
 <h2>Tasks</h2>
 <ul>
-<li><b>New task</b> — toolbar or <b>File</b> flow; set title, received date, due date.</li>
-<li><b>Save task</b> — persists the right-hand detail form (title, description, status, impact/urgency, dates).</li>
-<li><b>Close task</b> — sets status closed and runs <b>on-close recurrence</b> if configured.</li>
+<li><b>New Task</b> (title, received, due), <b>Save Task</b> (persist the detail form), <b>Close Task</b> (close + on-close recurrence if configured) — toolbar, <b>Task actions</b> row at the top of the detail pane, and shortcuts (defaults Ctrl+N, Ctrl+S, Ctrl+Shift+C; change under Settings).</li>
 <li><b>Impact / Urgency / Priority</b> — priority is computed (ServiceNow-style matrix). Use <b>Priority matrix…</b> on the toolbar to pick impact/urgency pairs. Changing I or U writes audit entries and a system note when priority changes.</li>
 <li><b>Statuses</b> — open, in progress, blocked, on hold, cancelled, closed.</li>
 <li><b>Next milestone</b> — derived from the first <i>open</i> todo (in list order) that has a milestone date.</li>
@@ -74,6 +72,12 @@ ul { padding-left: 1.2em; }
 <h2>Activity</h2>
 <ul>
 <li><b>Activity</b> on the task panel merges field audit lines and note timeline.</li>
+</ul>
+
+<h2>Settings</h2>
+<ul>
+<li><b>Customize task panel layout…</b> — reorder the sections below the core task fields (Todos, Notes, Blockers, Recurring, Activity). Saved per vault in <code>ui_settings.json</code>.</li>
+<li><b>Keyboard shortcuts…</b> — change shortcuts for New Task, Save Task, and Close Task.</li>
 </ul>
 
 </body>

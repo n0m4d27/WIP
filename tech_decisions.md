@@ -147,6 +147,12 @@ Field names from Access are inputs only; schema uses Pythonic consistency:
 ## Interaction consistency
 - After save/update actions that refresh list-backed panes (tasks, notes, todos, blockers, holidays), the UI should preserve the previously selected item when it still exists; for newly created items, prefer selecting the new row. This is a deliberate usability rule to avoid forcing re-selection while editing.
 
+## Task detail layout and shortcuts
+- **Movable sections:** Below the core task fields (ticket through next milestone), the blocks **Todos**, **Notes**, **Blockers**, **Recurring**, and **Activity** can be reordered via **Settings → Customize task panel layout…** (list with Move up/down). Order is stored in the vault data folder as **`ui_settings.json`** (with **`auth.json`** and the database).
+- **Task commands placement:** **New Task**, **Save Task**, and **Close Task** remain on the main toolbar for discoverability; the same three actions are duplicated in a **Task actions** row at the top of the task detail (right) pane so frequent edits do not require moving the pointer to the window top edge. Capitalize **Task** in these labels.
+- **Keyboard shortcuts:** The same three actions have **application-wide** shortcuts (defaults: **Ctrl+N**, **Ctrl+S**, **Ctrl+Shift+C** for Close Task so **Ctrl+W** stays free for typical “close window” semantics). Users can change them in **Settings → Keyboard shortcuts…**; shortcuts are persisted in **`ui_settings.json`**.
+- After the user picks a vault folder (when `TASKTRACKER_DATA` was not preset), startup sets **`TASKTRACKER_DATA`** to that folder so all `app_data`-relative paths (including UI settings and personal notes) resolve to the active vault.
+
 ## Deferred Decisions
 - Authentication/authorization model (single-user desktop may stay minimal).
 - Notification delivery channel (email/Teams/etc.).

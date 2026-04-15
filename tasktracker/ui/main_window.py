@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QAction, QColor, QTextCharFormat
+from PySide6.QtGui import QAction, QColor, QKeySequence, QTextCharFormat
 from PySide6.QtWidgets import (
     QCalendarWidget,
     QCheckBox,
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextEdit,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -46,7 +47,10 @@ from tasktracker.domain.priority import compute_priority, priority_display
 from tasktracker.domain.ticket import format_task_ticket
 from tasktracker.services.task_service import TaskService
 from tasktracker.ui.date_widgets import date_edit_with_today_button
+from tasktracker.ui.keyboard_shortcuts_dialog import run_keyboard_shortcuts_dialog
 from tasktracker.ui.priority_matrix_dialog import PriorityMatrixDialog
+from tasktracker.ui.settings_store import load_ui_settings, normalize_section_order, save_ui_settings
+from tasktracker.ui.task_panel_layout_dialog import run_task_panel_layout_dialog
 from tasktracker.ui.todo_dialog import run_add_todo_dialog
 from tasktracker.ui.user_guide_dialog import run_user_guide_dialog
 
@@ -108,9 +112,12 @@ class MainWindow(QMainWindow):
         self._session = session_factory()
         self._svc = TaskService(self._session)
         self._current_task_id: int | None = None
+        self._ui_settings = load_ui_settings()
 
+        self._create_task_actions()
         self._build_ui()
         self._build_menu_toolbar()
+        self._apply_task_action_shortcuts()
         self._reload_task_list()
 
     def _session_reset(self) -> None:
@@ -130,21 +137,75 @@ class MainWindow(QMainWindow):
                 return True
         return False
 
+    def _create_task_actions(self) -> None:
+        self.act_new_task = QAction("New Task", self)
+        self.act_new_task.triggered.connect(self._new_task)
+        self.act_save_task = QAction("Save Task", self)
+        self.act_save_task.triggered.connect(self._save_task_detail)
+        self.act_close_task = QAction("Close Task", self)
+        self.act_close_task.triggered.connect(self._close_current_task)
+
+    def _apply_task_action_shortcuts(self) -> None:
+        sc = self._ui_settings.get("shortcuts", {})
+        ctx = Qt.ShortcutContext.ApplicationShortcut
+        self.act_new_task.setShortcut(QKeySequence(sc.get("new_task", "Ctrl+N")))
+        self.act_new_task.setShortcutContext(ctx)
+        self.act_save_task.setShortcut(QKeySequence(sc.get("save_task", "Ctrl+S")))
+        self.act_save_task.setShortcutContext(ctx)
+        self.act_close_task.setShortcut(QKeySequence(sc.get("close_task", "Ctrl+Shift+C")))
+        self.act_close_task.setShortcutContext(ctx)
+        self._sync_task_action_tooltips()
+
+    def _sync_task_action_tooltips(self) -> None:
+        for act, label in (
+            (self.act_new_task, "New Task"),
+            (self.act_save_task, "Save Task"),
+            (self.act_close_task, "Close Task"),
+        ):
+            sh = act.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+            act.setToolTip(f"{label} ({sh})" if sh else label)
+
+    def _apply_task_section_order(self, order: list[str]) -> None:
+        """Reorder movable section group boxes without rebuilding the tab."""
+        if not hasattr(self, "_task_sections_layout") or not hasattr(self, "_section_by_id"):
+            return
+        norm = normalize_section_order(order)
+        while self._task_sections_layout.count():
+            self._task_sections_layout.takeAt(0)
+        for sid in norm:
+            w = self._section_by_id.get(sid)
+            if w is not None:
+                self._task_sections_layout.addWidget(w)
+
+    def _open_task_panel_layout(self) -> None:
+        order = run_task_panel_layout_dialog(self, self._ui_settings["task_panel_section_order"])
+        if order is None:
+            return
+        self._ui_settings["task_panel_section_order"] = normalize_section_order(order)
+        save_ui_settings(self._ui_settings)
+        self._apply_task_section_order(self._ui_settings["task_panel_section_order"])
+
+    def _open_keyboard_shortcuts(self) -> None:
+        new_sc = run_keyboard_shortcuts_dialog(self, self._ui_settings.get("shortcuts", {}))
+        if new_sc is None:
+            return
+        self._ui_settings["shortcuts"] = new_sc
+        save_ui_settings(self._ui_settings)
+        self._apply_task_action_shortcuts()
+
     def _build_menu_toolbar(self) -> None:
         tb = QToolBar()
         self.addToolBar(tb)
-        act_new = QAction("New task", self)
-        act_new.triggered.connect(self._new_task)
-        tb.addAction(act_new)
-        act_save = QAction("Save task", self)
-        act_save.triggered.connect(self._save_task_detail)
-        tb.addAction(act_save)
-        act_close = QAction("Close task", self)
-        act_close.triggered.connect(self._close_current_task)
-        tb.addAction(act_close)
+        tb.addAction(self.act_new_task)
+        tb.addAction(self.act_save_task)
+        tb.addAction(self.act_close_task)
         act_matrix = QAction("Priority matrix…", self)
         act_matrix.triggered.connect(self._show_matrix)
         tb.addAction(act_matrix)
+
+        m_settings = self.menuBar().addMenu("&Settings")
+        m_settings.addAction("Customize task panel layout…", self._open_task_panel_layout)
+        m_settings.addAction("Keyboard shortcuts…", self._open_keyboard_shortcuts)
 
         m_file = self.menuBar().addMenu("&File")
         m_file.addAction("Export tasks to CSV…", self._export_csv)
@@ -220,7 +281,26 @@ class MainWindow(QMainWindow):
         right.setWidgetResizable(True)
         detail = QWidget()
         self.detail_widget = detail
-        fl = QFormLayout(detail)
+        detail_root = QVBoxLayout(detail)
+
+        act_host = QWidget()
+        act_row = QHBoxLayout(act_host)
+        act_cap = QLabel("Task actions")
+        act_cap.setStyleSheet("font-weight: bold;")
+        act_cap.setToolTip(
+            "Same commands as the window toolbar, placed next to the form so you do not "
+            "need to move focus to the top edge after working in the task list."
+        )
+        act_row.addWidget(act_cap)
+        act_row.addStretch()
+        for act in (self.act_new_task, self.act_save_task, self.act_close_task):
+            tbtn = QToolButton()
+            tbtn.setDefaultAction(act)
+            act_row.addWidget(tbtn)
+        detail_root.addWidget(act_host)
+
+        core = QWidget()
+        fl = QFormLayout(core)
 
         self.lbl_ticket = QLabel("—")
         self.lbl_ticket.setStyleSheet("font-weight: bold;")
@@ -273,6 +353,8 @@ class MainWindow(QMainWindow):
         self.lbl_next_ms = QLabel("—")
         fl.addRow("Next milestone", self.lbl_next_ms)
 
+        self._section_by_id: dict[str, QGroupBox] = {}
+
         todo_box = QGroupBox("Todos (ordered)")
         todo_l = QVBoxLayout(todo_box)
         self.todo_list = QListWidget()
@@ -291,7 +373,7 @@ class MainWindow(QMainWindow):
         t_btn.addWidget(self.btn_todo_up)
         t_btn.addWidget(self.btn_todo_dn)
         todo_l.addLayout(t_btn)
-        fl.addRow(todo_box)
+        self._section_by_id["todos"] = todo_box
 
         note_box = QGroupBox("Notes (rich text)")
         note_l = QVBoxLayout(note_box)
@@ -310,7 +392,7 @@ class MainWindow(QMainWindow):
         n_btn.addWidget(self.btn_note_new)
         n_btn.addWidget(self.btn_note_save)
         note_l.addLayout(n_btn)
-        fl.addRow(note_box)
+        self._section_by_id["notes"] = note_box
 
         blk_box = QGroupBox("Blockers")
         blk_l = QVBoxLayout(blk_box)
@@ -324,7 +406,7 @@ class MainWindow(QMainWindow):
         b_btn.addWidget(self.btn_blk_add)
         b_btn.addWidget(self.btn_blk_clear)
         blk_l.addLayout(b_btn)
-        fl.addRow(blk_box)
+        self._section_by_id["blockers"] = blk_box
 
         rec_box = QGroupBox("Recurring (template todos for next instance)")
         rec_l = QVBoxLayout(rec_box)
@@ -354,7 +436,7 @@ class MainWindow(QMainWindow):
         self.btn_rec_save = QPushButton("Save recurrence settings")
         self.btn_rec_save.clicked.connect(self._save_recurrence)
         rec_l.addWidget(self.btn_rec_save)
-        fl.addRow(rec_box)
+        self._section_by_id["recurring"] = rec_box
 
         tl_box = QGroupBox("Activity (audit + notes)")
         tl_l = QVBoxLayout(tl_box)
@@ -365,7 +447,18 @@ class MainWindow(QMainWindow):
         btn_tl = QPushButton("Refresh timeline")
         btn_tl.clicked.connect(self._refresh_timeline)
         tl_l.addWidget(btn_tl)
-        fl.addRow(tl_box)
+        self._section_by_id["activity"] = tl_box
+
+        self._sections_host = QWidget()
+        self._task_sections_layout = QVBoxLayout(self._sections_host)
+        self._task_sections_layout.setContentsMargins(0, 0, 0, 0)
+        for sid in self._ui_settings["task_panel_section_order"]:
+            bx = self._section_by_id.get(sid)
+            if bx is not None:
+                self._task_sections_layout.addWidget(bx)
+
+        detail_root.addWidget(core)
+        detail_root.addWidget(self._sections_host)
 
         right.setWidget(detail)
         split.addWidget(left)
@@ -688,7 +781,7 @@ class MainWindow(QMainWindow):
 
     def _new_task(self) -> None:
         d = QDialog(self)
-        d.setWindowTitle("New task")
+        d.setWindowTitle("New Task")
         form = QFormLayout(d)
         title = QLineEdit()
         recv_row, recv = date_edit_with_today_button(d)

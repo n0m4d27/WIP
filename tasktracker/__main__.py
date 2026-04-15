@@ -31,7 +31,8 @@ def main() -> None:
         chosen = run_vault_picker_dialog(default_data_dir())
         if chosen is None:
             raise SystemExit(0)
-        data_dir = chosen
+        data_dir = chosen.resolve()
+        os.environ["TASKTRACKER_DATA"] = str(data_dir)
 
     auth_path = data_dir / "auth.json"
     db_plain = data_dir / "tasks.db"
