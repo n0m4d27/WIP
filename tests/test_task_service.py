@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 from tasktracker.domain.enums import RecurrenceGenerationMode, TaskStatus
 from tasktracker.services.task_service import TaskService
@@ -89,3 +90,54 @@ def test_search_title_notes_and_ticket(svc: TaskService) -> None:
 
     by_ticket_prefixed = svc.search_tasks("T1", fields={"ticket"})
     assert [t.id for t in by_ticket_prefixed] == [b.id]
+
+
+def test_task_area_and_person_assignment(svc: TaskService) -> None:
+    cat = svc.add_category("Operations")
+    assert cat is not None
+    sub = svc.add_subcategory(cat.id, "Network")
+    assert sub is not None
+    area = svc.add_area(sub.id, "Core Router")
+    assert area is not None
+    person = svc.add_person("Ada", "Lovelace", "E100")
+    assert person is not None
+
+    t = svc.create_task(
+        title="Router patch",
+        received_date=dt.date(2026, 7, 1),
+        area_id=area.id,
+        person_id=person.id,
+    )
+    loaded = svc.get_task(t.id)
+    assert loaded is not None
+    assert loaded.area is not None
+    assert loaded.area.name == "Core Router"
+    assert loaded.area.subcategory.name == "Network"
+    assert loaded.area.subcategory.category.name == "Operations"
+    assert loaded.person is not None
+    assert loaded.person.employee_id == "E100"
+
+
+def test_reference_data_export_import_roundtrip(svc: TaskService, tmp_path) -> None:
+    cat = svc.add_category("Ops")
+    assert cat is not None
+    sub = svc.add_subcategory(cat.id, "Windows")
+    assert sub is not None
+    area = svc.add_area(sub.id, "Patching")
+    assert area is not None
+    person = svc.add_person("Grace", "Hopper", "E200")
+    assert person is not None
+
+    path = tmp_path / "refs.json"
+    svc.export_reference_data(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["categories"][0]["name"] == "Ops"
+    assert payload["people"][0]["employee_id"] == "E200"
+
+    # Re-import should merge and remain idempotent (no duplicate people by employee_id).
+    summary = svc.import_reference_data(path)
+    assert summary["categories"] >= 1
+    assert summary["subcategories"] >= 1
+    assert summary["areas"] >= 1
+    assert summary["people"] >= 1
+    assert len([p for p in svc.list_people() if p.employee_id == "E200"]) == 1

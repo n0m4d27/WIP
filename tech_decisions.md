@@ -102,6 +102,13 @@
 ### Business holidays
 - **User-maintained** holiday list (settings or import—UI TBD); used by recurrence skip logic and any calendar/holiday hints. No code deploy to add holidays each year.
 
+### Task taxonomy and attribution
+- Tasks support a vault-scoped taxonomy: **Category → Sub-category → Area**.
+- Tasks can optionally reference an **Area**; category/sub-category are derived from that selected area.
+- Tasks can optionally reference a **For person** attribution entry (`first_name`, `last_name`, `employee_id`).
+- Taxonomy and people are managed in **Settings** and are persisted per vault.
+- Taxonomy/people support **JSON export/import** so multiple vaults can be synchronized with the same reference data.
+
 ## Preliminary Data Model Decisions
 Based on Access relationship structure, preserve these cardinalities (MVP1 unless noted):
 - One `Task` → many `TaskNote` (with **version history** for note edits)

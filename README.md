@@ -21,6 +21,14 @@ The app is intentionally designed around:
   - Ordered todo list per task, with milestone dates.
   - Next milestone auto-derived from the first open dated todo.
   - Blockers tracked separately and clearable independently.
+  - Optional task attribution fields for taxonomy and assignee target.
+
+- **Taxonomy and people master data (per vault)**
+  - Custom **Category -> Sub-category -> Area** hierarchy.
+  - Per-task area selection (with category/sub-category context).
+  - Per-task **For person** selection from people entries (first, last, employee ID).
+  - Settings tools to manage this reference data and keep it vault-specific.
+  - JSON export/import to sync category/person reference data across vaults.
 
 - **Notes, history, and activity**
   - Rich-text notes with editable user notes and version history.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 import html as htmllib
+import json
 import re
 from pathlib import Path
 
@@ -49,6 +50,7 @@ from tasktracker.services.task_service import TaskService
 from tasktracker.ui.date_widgets import date_edit_with_today_button
 from tasktracker.ui.keyboard_shortcuts_dialog import run_keyboard_shortcuts_dialog
 from tasktracker.ui.priority_matrix_dialog import PriorityMatrixDialog
+from tasktracker.ui.reference_data_dialog import run_manage_reference_data_dialog
 from tasktracker.ui.settings_store import load_ui_settings, normalize_section_order, save_ui_settings
 from tasktracker.ui.task_panel_layout_dialog import run_task_panel_layout_dialog
 from tasktracker.ui.todo_dialog import run_add_todo_dialog
@@ -93,6 +95,10 @@ def _system_note_title(body_plain: str) -> str:
     return "System update"
 
 
+def _person_label(first_name: str, last_name: str, employee_id: str) -> str:
+    return f"{last_name}, {first_name} ({employee_id})"
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -112,6 +118,7 @@ class MainWindow(QMainWindow):
         self._session = session_factory()
         self._svc = TaskService(self._session)
         self._current_task_id: int | None = None
+        self._loading_task_form = False
         self._ui_settings = load_ui_settings()
 
         self._create_task_actions()
@@ -193,6 +200,47 @@ class MainWindow(QMainWindow):
         save_ui_settings(self._ui_settings)
         self._apply_task_action_shortcuts()
 
+    def _open_reference_data_manager(self) -> None:
+        run_manage_reference_data_dialog(self, self._svc)
+        self._reload_task_taxonomy_inputs()
+
+    def _export_reference_data(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export reference data",
+            "",
+            "JSON (*.json)",
+        )
+        if not path:
+            return
+        self._svc.export_reference_data(Path(path))
+        QMessageBox.information(self, "Reference data", "Exported.")
+
+    def _import_reference_data(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import reference data",
+            "",
+            "JSON (*.json)",
+        )
+        if not path:
+            return
+        try:
+            summary = self._svc.import_reference_data(Path(path))
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            QMessageBox.warning(self, "Reference data", f"Import failed: {exc}")
+            return
+        self._reload_task_taxonomy_inputs()
+        QMessageBox.information(
+            self,
+            "Reference data",
+            "Import complete.\n"
+            f"Categories: {summary['categories']}\n"
+            f"Sub-categories: {summary['subcategories']}\n"
+            f"Areas: {summary['areas']}\n"
+            f"People: {summary['people']}",
+        )
+
     def _build_menu_toolbar(self) -> None:
         tb = QToolBar()
         self.addToolBar(tb)
@@ -206,6 +254,10 @@ class MainWindow(QMainWindow):
         m_settings = self.menuBar().addMenu("&Settings")
         m_settings.addAction("Customize task panel layout…", self._open_task_panel_layout)
         m_settings.addAction("Keyboard shortcuts…", self._open_keyboard_shortcuts)
+        m_settings.addSeparator()
+        m_settings.addAction("Manage categories and people…", self._open_reference_data_manager)
+        m_settings.addAction("Export categories and people…", self._export_reference_data)
+        m_settings.addAction("Import categories and people…", self._import_reference_data)
 
         m_file = self.menuBar().addMenu("&File")
         m_file.addAction("Export tasks to CSV…", self._export_csv)
@@ -341,6 +393,13 @@ class MainWindow(QMainWindow):
         self.f_closed.setSpecialValueText("—")
         self.f_closed.setDate(QDate.currentDate())
 
+        self.f_category = QComboBox()
+        self.f_subcategory = QComboBox()
+        self.f_area = QComboBox()
+        self.f_person = QComboBox()
+        self.f_category.currentIndexChanged.connect(self._on_category_combo_changed)
+        self.f_subcategory.currentIndexChanged.connect(self._on_subcategory_combo_changed)
+
         fl.addRow("Ticket", self.lbl_ticket)
         fl.addRow("Title", self.f_title)
         fl.addRow("Description", self.f_description)
@@ -349,9 +408,14 @@ class MainWindow(QMainWindow):
         fl.addRow("Received", recv_row)
         fl.addRow("Due", due_row)
         fl.addRow("Closed", closed_row)
+        fl.addRow("Category", self.f_category)
+        fl.addRow("Sub-category", self.f_subcategory)
+        fl.addRow("Area", self.f_area)
+        fl.addRow("For person", self.f_person)
 
         self.lbl_next_ms = QLabel("—")
         fl.addRow("Next milestone", self.lbl_next_ms)
+        self._reload_task_taxonomy_inputs()
 
         self._section_by_id: dict[str, QGroupBox] = {}
 
@@ -587,6 +651,81 @@ class MainWindow(QMainWindow):
         }
         return {k for k, w in m.items() if w.isChecked()}
 
+    @staticmethod
+    def _combo_current_int(combo: QComboBox) -> int | None:
+        raw = combo.currentData()
+        return int(raw) if raw is not None else None
+
+    def _on_category_combo_changed(self, *_args) -> None:
+        if self._loading_task_form:
+            return
+        cat_id = self._combo_current_int(self.f_category)
+        self._populate_subcategory_combo(cat_id, selected_sub_id=None)
+        self._populate_area_combo(None, selected_area_id=None)
+
+    def _on_subcategory_combo_changed(self, *_args) -> None:
+        if self._loading_task_form:
+            return
+        sub_id = self._combo_current_int(self.f_subcategory)
+        self._populate_area_combo(sub_id, selected_area_id=None)
+
+    def _populate_subcategory_combo(
+        self, category_id: int | None, *, selected_sub_id: int | None
+    ) -> None:
+        self.f_subcategory.blockSignals(True)
+        self.f_subcategory.clear()
+        self.f_subcategory.addItem("— None —", None)
+        if category_id is not None:
+            for sub in self._svc.list_subcategories(category_id):
+                self.f_subcategory.addItem(sub.name, sub.id)
+        idx = self.f_subcategory.findData(selected_sub_id)
+        self.f_subcategory.setCurrentIndex(idx if idx >= 0 else 0)
+        self.f_subcategory.blockSignals(False)
+
+    def _populate_area_combo(self, subcategory_id: int | None, *, selected_area_id: int | None) -> None:
+        self.f_area.clear()
+        self.f_area.addItem("— None —", None)
+        if subcategory_id is not None:
+            for area in self._svc.list_areas(subcategory_id):
+                self.f_area.addItem(area.name, area.id)
+        idx = self.f_area.findData(selected_area_id)
+        self.f_area.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _reload_task_taxonomy_inputs(self, task=None) -> None:
+        """Reload category/subcategory/area/person combos from vault master data."""
+        selected_person = self._combo_current_int(self.f_person) if hasattr(self, "f_person") else None
+        selected_area = self._combo_current_int(self.f_area) if hasattr(self, "f_area") else None
+        selected_sub = self._combo_current_int(self.f_subcategory) if hasattr(self, "f_subcategory") else None
+        selected_cat = self._combo_current_int(self.f_category) if hasattr(self, "f_category") else None
+
+        if task is not None and getattr(task, "area", None) is not None:
+            selected_area = task.area.id
+            selected_sub = task.area.subcategory.id
+            selected_cat = task.area.subcategory.category.id
+        if task is not None:
+            selected_person = task.person.id if task.person is not None else None
+
+        self._loading_task_form = True
+        self.f_category.clear()
+        self.f_category.addItem("— None —", None)
+        for cat in self._svc.list_categories():
+            self.f_category.addItem(cat.name, cat.id)
+        cidx = self.f_category.findData(selected_cat)
+        self.f_category.setCurrentIndex(cidx if cidx >= 0 else 0)
+
+        category_id = self._combo_current_int(self.f_category)
+        self._populate_subcategory_combo(category_id, selected_sub_id=selected_sub)
+        subcategory_id = self._combo_current_int(self.f_subcategory)
+        self._populate_area_combo(subcategory_id, selected_area_id=selected_area)
+
+        self.f_person.clear()
+        self.f_person.addItem("— None —", None)
+        for p in self._svc.list_people():
+            self.f_person.addItem(_person_label(p.first_name, p.last_name, p.employee_id), p.id)
+        pidx = self.f_person.findData(selected_person)
+        self.f_person.setCurrentIndex(pidx if pidx >= 0 else 0)
+        self._loading_task_form = False
+
     def _tasks_for_sidebar(self):
         include_closed = not self.chk_hide_closed.isChecked()
         q = self.search_edit.text().strip()
@@ -642,6 +781,7 @@ class MainWindow(QMainWindow):
         self.rec_enable.setChecked(False)
         self.rec_template.clear()
         self.lbl_next_ms.setText("—")
+        self._reload_task_taxonomy_inputs()
 
     def _on_task_selected(self, cur: QListWidgetItem | None, _prev: QListWidgetItem | None) -> None:
         if not cur:
@@ -731,6 +871,7 @@ class MainWindow(QMainWindow):
         else:
             self.rec_template.clear()
 
+        self._reload_task_taxonomy_inputs(task)
         self._refresh_timeline()
 
     def _refresh_priority_label(self) -> None:
@@ -763,6 +904,8 @@ class MainWindow(QMainWindow):
             received_date=_qdate_to_py(self.f_received.date()),
             due_date=due_py,
             closed_date=closed_py if st == TaskStatus.CLOSED else None,
+            area_id=self._combo_current_int(self.f_area),
+            person_id=self._combo_current_int(self.f_person),
         )
         self._reload_task_list()
         self._load_task_detail()

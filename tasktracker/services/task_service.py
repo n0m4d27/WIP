@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import html
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,10 +16,14 @@ from tasktracker.db.models import (
     BusinessHoliday,
     RecurringRule,
     RecurringTodoTemplate,
+    TaskArea,
+    TaskCategory,
     Task,
     TaskBlocker,
     TaskNote,
     TaskNoteVersion,
+    TaskPerson,
+    TaskSubCategory,
     TaskUpdateLog,
     TodoItem,
 )
@@ -165,6 +170,43 @@ def _format_audit_value(field_name: str, raw: str | None) -> str:
     return _clip(raw)
 
 
+def _task_taxonomy_labels(task: Task) -> tuple[str, str, str]:
+    area = task.area
+    sub = area.subcategory if area else None
+    cat = sub.category if sub else None
+    return (
+        cat.name if cat else "",
+        sub.name if sub else "",
+        area.name if area else "",
+    )
+
+
+def _area_label_by_id(session: Session, area_id: int | None) -> str | None:
+    if area_id is None:
+        return None
+    area = session.get(
+        TaskArea,
+        area_id,
+        options=[joinedload(TaskArea.subcategory).joinedload(TaskSubCategory.category)],
+    )
+    if area is None:
+        return None
+    sub = area.subcategory
+    cat = sub.category if sub else None
+    cat_name = cat.name if cat else ""
+    sub_name = sub.name if sub else ""
+    return f"{cat_name} / {sub_name} / {area.name}".strip(" /")
+
+
+def _person_label_by_id(session: Session, person_id: int | None) -> str | None:
+    if person_id is None:
+        return None
+    person = session.get(TaskPerson, person_id)
+    if person is None:
+        return None
+    return f"{person.last_name}, {person.first_name} ({person.employee_id})"
+
+
 @dataclass
 class TimelineEntry:
     at: dt.datetime
@@ -176,6 +218,9 @@ class TimelineEntry:
 def _like_pattern(needle: str) -> str:
     cleaned = "".join(c for c in needle.lower() if c not in "%_\\")
     return f"%{cleaned}%"
+
+
+_UNSET = object()
 
 
 class TaskService:
@@ -196,6 +241,8 @@ class TaskService:
         q: Select[tuple[Task]] = select(Task).options(
             selectinload(Task.todos),
             selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
+            selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),
+            selectinload(Task.person),
         )
         if not include_closed:
             q = q.where(Task.status != TaskStatus.CLOSED)
@@ -286,6 +333,8 @@ class TaskService:
             .options(
                 selectinload(Task.todos),
                 selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
+                selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),
+                selectinload(Task.person),
             )
             .distinct()
         )
@@ -311,6 +360,8 @@ class TaskService:
                 selectinload(Task.notes).selectinload(TaskNote.versions),
                 selectinload(Task.blockers),
                 selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
+                selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),
+                selectinload(Task.person),
             )
         ).unique().one_or_none()
 
@@ -324,6 +375,8 @@ class TaskService:
         status: str = TaskStatus.OPEN,
         impact: int = 2,
         urgency: int = 2,
+        area_id: int | None = None,
+        person_id: int | None = None,
     ) -> Task:
         pr = compute_priority(impact=impact, urgency=urgency)
         ticket_number = self._next_ticket_number()
@@ -337,12 +390,20 @@ class TaskService:
             priority=pr,
             received_date=received_date,
             due_date=due_date,
+            area_id=area_id,
+            person_id=person_id,
         )
         self.session.add(task)
         self.session.flush()
         _log_change(self.session, task.id, "title", None, task.title)
         _log_change(self.session, task.id, "status", None, task.status)
         _log_change(self.session, task.id, "ticket_number", None, str(task.ticket_number))
+        if area_id is not None:
+            _log_change(self.session, task.id, "area", None, _area_label_by_id(self.session, area_id))
+        if person_id is not None:
+            _log_change(
+                self.session, task.id, "for_person", None, _person_label_by_id(self.session, person_id)
+            )
         refresh_next_milestone(self.session, task)
         self.session.commit()
         self.session.refresh(task)
@@ -360,6 +421,8 @@ class TaskService:
         received_date: dt.date | None = None,
         due_date: dt.date | None = None,
         closed_date: dt.date | None = None,
+        area_id: int | None | object = _UNSET,
+        person_id: int | None | object = _UNSET,
     ) -> Task | None:
         task = self.session.get(Task, task_id)
         if not task:
@@ -383,6 +446,24 @@ class TaskService:
         if closed_date is not None and closed_date != task.closed_date:
             _log_change(self.session, task.id, "closed_date", task.closed_date, closed_date)
             task.closed_date = closed_date
+        if area_id is not _UNSET and area_id != task.area_id:
+            _log_change(
+                self.session,
+                task.id,
+                "area",
+                _area_label_by_id(self.session, task.area_id),
+                _area_label_by_id(self.session, int(area_id) if area_id is not None else None),
+            )
+            task.area_id = area_id
+        if person_id is not _UNSET and person_id != task.person_id:
+            _log_change(
+                self.session,
+                task.id,
+                "for_person",
+                _person_label_by_id(self.session, task.person_id),
+                _person_label_by_id(self.session, int(person_id) if person_id is not None else None),
+            )
+            task.person_id = person_id
 
         old_pr = task.priority
         if impact is not None and impact != task.impact:
@@ -475,6 +556,8 @@ class TaskService:
             received_date=recv,
             due_date=due,
             closed_date=None,
+            area_id=closed.area_id,
+            person_id=closed.person_id,
         )
         self.session.add(nt)
         self.session.flush()
@@ -793,9 +876,20 @@ class TaskService:
                     "due_date",
                     "closed_date",
                     "next_milestone_date",
+                    "category",
+                    "subcategory",
+                    "area",
+                    "for_person",
+                    "for_person_employee_id",
                 ]
             )
             for t in tasks:
+                cat_name, sub_name, area_name = _task_taxonomy_labels(t)
+                person_name = ""
+                person_emp = ""
+                if t.person is not None:
+                    person_name = f"{t.person.last_name}, {t.person.first_name}"
+                    person_emp = t.person.employee_id
                 w.writerow(
                     [
                         t.id,
@@ -809,6 +903,11 @@ class TaskService:
                         t.due_date.isoformat() if t.due_date else "",
                         t.closed_date.isoformat() if t.closed_date else "",
                         t.next_milestone_date.isoformat() if t.next_milestone_date else "",
+                        cat_name,
+                        sub_name,
+                        area_name,
+                        person_name,
+                        person_emp,
                     ]
                 )
 
@@ -831,9 +930,20 @@ class TaskService:
             "due_date",
             "closed_date",
             "next_milestone_date",
+            "category",
+            "subcategory",
+            "area",
+            "for_person",
+            "for_person_employee_id",
         ]
         ws.append(headers)
         for t in tasks:
+            cat_name, sub_name, area_name = _task_taxonomy_labels(t)
+            person_name = ""
+            person_emp = ""
+            if t.person is not None:
+                person_name = f"{t.person.last_name}, {t.person.first_name}"
+                person_emp = t.person.employee_id
             ws.append(
                 [
                     t.id,
@@ -847,6 +957,11 @@ class TaskService:
                     t.due_date.isoformat() if t.due_date else "",
                     t.closed_date.isoformat() if t.closed_date else "",
                     t.next_milestone_date.isoformat() if t.next_milestone_date else "",
+                    cat_name,
+                    sub_name,
+                    area_name,
+                    person_name,
+                    person_emp,
                 ]
             )
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -889,3 +1004,221 @@ class TaskService:
         if h:
             self.session.delete(h)
             self.session.commit()
+
+    def list_categories(self) -> list[TaskCategory]:
+        q = (
+            select(TaskCategory)
+            .options(
+                selectinload(TaskCategory.subcategories).selectinload(TaskSubCategory.areas),
+            )
+            .order_by(TaskCategory.name)
+        )
+        return list(self.session.scalars(q).unique().all())
+
+    def add_category(self, name: str) -> TaskCategory | None:
+        cleaned = name.strip()
+        if not cleaned:
+            return None
+        existing = self.session.scalar(select(TaskCategory).where(TaskCategory.name == cleaned))
+        if existing:
+            return existing
+        item = TaskCategory(name=cleaned)
+        self.session.add(item)
+        self.session.commit()
+        self.session.refresh(item)
+        return item
+
+    def delete_category(self, category_id: int) -> None:
+        cat = self.session.get(
+            TaskCategory,
+            category_id,
+            options=[selectinload(TaskCategory.subcategories).selectinload(TaskSubCategory.areas)],
+        )
+        if not cat:
+            return
+        area_ids = [a.id for s in cat.subcategories for a in s.areas]
+        if area_ids:
+            for task in self.session.scalars(select(Task).where(Task.area_id.in_(area_ids))).all():
+                task.area_id = None
+        self.session.delete(cat)
+        self.session.commit()
+
+    def list_subcategories(self, category_id: int) -> list[TaskSubCategory]:
+        q = (
+            select(TaskSubCategory)
+            .where(TaskSubCategory.category_id == category_id)
+            .options(selectinload(TaskSubCategory.areas))
+            .order_by(TaskSubCategory.name)
+        )
+        return list(self.session.scalars(q).unique().all())
+
+    def add_subcategory(self, category_id: int, name: str) -> TaskSubCategory | None:
+        cleaned = name.strip()
+        if not cleaned:
+            return None
+        category = self.session.get(TaskCategory, category_id)
+        if not category:
+            return None
+        existing = self.session.scalar(
+            select(TaskSubCategory).where(
+                TaskSubCategory.category_id == category_id,
+                TaskSubCategory.name == cleaned,
+            )
+        )
+        if existing:
+            return existing
+        item = TaskSubCategory(category_id=category_id, name=cleaned)
+        self.session.add(item)
+        self.session.commit()
+        self.session.refresh(item)
+        return item
+
+    def delete_subcategory(self, subcategory_id: int) -> None:
+        sub = self.session.get(
+            TaskSubCategory,
+            subcategory_id,
+            options=[selectinload(TaskSubCategory.areas)],
+        )
+        if not sub:
+            return
+        area_ids = [a.id for a in sub.areas]
+        if area_ids:
+            for task in self.session.scalars(select(Task).where(Task.area_id.in_(area_ids))).all():
+                task.area_id = None
+        self.session.delete(sub)
+        self.session.commit()
+
+    def list_areas(self, subcategory_id: int) -> list[TaskArea]:
+        q = (
+            select(TaskArea)
+            .where(TaskArea.subcategory_id == subcategory_id)
+            .order_by(TaskArea.name)
+        )
+        return list(self.session.scalars(q).all())
+
+    def add_area(self, subcategory_id: int, name: str) -> TaskArea | None:
+        cleaned = name.strip()
+        if not cleaned:
+            return None
+        sub = self.session.get(TaskSubCategory, subcategory_id)
+        if not sub:
+            return None
+        existing = self.session.scalar(
+            select(TaskArea).where(
+                TaskArea.subcategory_id == subcategory_id,
+                TaskArea.name == cleaned,
+            )
+        )
+        if existing:
+            return existing
+        item = TaskArea(subcategory_id=subcategory_id, name=cleaned)
+        self.session.add(item)
+        self.session.commit()
+        self.session.refresh(item)
+        return item
+
+    def delete_area(self, area_id: int) -> None:
+        area = self.session.get(TaskArea, area_id)
+        if not area:
+            return
+        for task in self.session.scalars(select(Task).where(Task.area_id == area_id)).all():
+            task.area_id = None
+        self.session.delete(area)
+        self.session.commit()
+
+    def list_people(self) -> list[TaskPerson]:
+        q = select(TaskPerson).order_by(TaskPerson.last_name, TaskPerson.first_name, TaskPerson.employee_id)
+        return list(self.session.scalars(q).all())
+
+    def add_person(self, first_name: str, last_name: str, employee_id: str) -> TaskPerson | None:
+        first = first_name.strip()
+        last = last_name.strip()
+        emp = employee_id.strip()
+        if not first or not last or not emp:
+            return None
+        existing = self.session.scalar(select(TaskPerson).where(TaskPerson.employee_id == emp))
+        if existing:
+            if existing.first_name != first or existing.last_name != last:
+                existing.first_name = first
+                existing.last_name = last
+                self.session.commit()
+                self.session.refresh(existing)
+            return existing
+        item = TaskPerson(first_name=first, last_name=last, employee_id=emp)
+        self.session.add(item)
+        self.session.commit()
+        self.session.refresh(item)
+        return item
+
+    def delete_person(self, person_id: int) -> None:
+        person = self.session.get(TaskPerson, person_id)
+        if not person:
+            return
+        for task in self.session.scalars(select(Task).where(Task.person_id == person_id)).all():
+            task.person_id = None
+        self.session.delete(person)
+        self.session.commit()
+
+    def export_reference_data(self, path: Path) -> None:
+        categories_out: list[dict[str, Any]] = []
+        for cat in self.list_categories():
+            sub_out: list[dict[str, Any]] = []
+            for sub in sorted(cat.subcategories, key=lambda x: x.name.lower()):
+                sub_out.append(
+                    {
+                        "name": sub.name,
+                        "areas": [a.name for a in sorted(sub.areas, key=lambda x: x.name.lower())],
+                    }
+                )
+            categories_out.append({"name": cat.name, "subcategories": sub_out})
+        people_out = [
+            {
+                "first_name": p.first_name,
+                "last_name": p.last_name,
+                "employee_id": p.employee_id,
+            }
+            for p in self.list_people()
+        ]
+        payload = {"categories": categories_out, "people": people_out}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def import_reference_data(self, path: Path) -> dict[str, int]:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        categories = raw.get("categories", []) if isinstance(raw, dict) else []
+        people = raw.get("people", []) if isinstance(raw, dict) else []
+
+        for cat in categories:
+            if not isinstance(cat, dict):
+                continue
+            cobj = self.add_category(str(cat.get("name", "")))
+            if cobj is None:
+                continue
+            for sub in cat.get("subcategories", []):
+                if not isinstance(sub, dict):
+                    continue
+                sobj = self.add_subcategory(cobj.id, str(sub.get("name", "")))
+                if sobj is None:
+                    continue
+                for area_name in sub.get("areas", []):
+                    if not isinstance(area_name, str):
+                        continue
+                    self.add_area(sobj.id, area_name)
+
+        for person in people:
+            if not isinstance(person, dict):
+                continue
+            self.add_person(
+                str(person.get("first_name", "")),
+                str(person.get("last_name", "")),
+                str(person.get("employee_id", "")),
+            )
+        # Return current totals after merge/import for a simple confirmation summary.
+        sub_total = self.session.scalar(select(func.count(TaskSubCategory.id))) or 0
+        area_total = self.session.scalar(select(func.count(TaskArea.id))) or 0
+        return {
+            "categories": len(self.list_categories()),
+            "subcategories": int(sub_total),
+            "areas": int(area_total),
+            "people": len(self.list_people()),
+        }

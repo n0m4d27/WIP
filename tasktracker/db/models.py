@@ -42,6 +42,12 @@ class Task(Base):
     due_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
     closed_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
     next_milestone_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
+    area_id: Mapped[int | None] = mapped_column(
+        ForeignKey("task_areas.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("task_people.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -65,6 +71,64 @@ class Task(Base):
     recurring_rule: Mapped["RecurringRule | None"] = relationship(
         back_populates="task", cascade="all, delete-orphan", uselist=False
     )
+    area: Mapped["TaskArea | None"] = relationship(back_populates="tasks")
+    person: Mapped["TaskPerson | None"] = relationship(back_populates="tasks")
+
+
+class TaskCategory(Base):
+    __tablename__ = "task_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True, index=True)
+
+    subcategories: Mapped[list["TaskSubCategory"]] = relationship(
+        back_populates="category", cascade="all, delete-orphan", order_by="TaskSubCategory.name"
+    )
+
+
+class TaskSubCategory(Base):
+    __tablename__ = "task_subcategories"
+    __table_args__ = (
+        UniqueConstraint("category_id", "name", name="uq_task_subcategories_category_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("task_categories.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    category: Mapped["TaskCategory"] = relationship(back_populates="subcategories")
+    areas: Mapped[list["TaskArea"]] = relationship(
+        back_populates="subcategory", cascade="all, delete-orphan", order_by="TaskArea.name"
+    )
+
+
+class TaskArea(Base):
+    __tablename__ = "task_areas"
+    __table_args__ = (
+        UniqueConstraint("subcategory_id", "name", name="uq_task_areas_subcategory_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    subcategory_id: Mapped[int] = mapped_column(
+        ForeignKey("task_subcategories.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    subcategory: Mapped["TaskSubCategory"] = relationship(back_populates="areas")
+    tasks: Mapped[list["Task"]] = relationship(back_populates="area")
+
+
+class TaskPerson(Base):
+    __tablename__ = "task_people"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    first_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    employee_id: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
+
+    tasks: Mapped[list["Task"]] = relationship(back_populates="person")
 
 
 class TodoItem(Base):
