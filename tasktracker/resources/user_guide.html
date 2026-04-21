@@ -16,6 +16,9 @@ ul { padding-left: 1.2em; }
 <h2>Tasks</h2>
 <ul>
 <li><b>New Task</b> (title, received, due), <b>Save Task</b> (persist the detail form), <b>Close Task</b> (close + on-close recurrence if configured) — toolbar, <b>Task actions</b> row at the top of the detail pane, and shortcuts (defaults Ctrl+N, Ctrl+S, Ctrl+Shift+C; change under Settings).</li>
+<li><b>Two-column detail layout</b> — the core fields are split for readability: the <i>left</i> column (wider) holds Ticket, Title, a combined Status / Impact / Urgency / Priority row, and Description (which grows to fill available height); the <i>right</i> column holds Received, Due, Closed, Category, Sub-category, Area, For person, and Next milestone.</li>
+<li><b>Inline sections vs. tabs</b> — below the core fields, <b>Todos</b>, <b>Blockers</b>, and <b>Recurring</b> stay visible inline as stacked group boxes; <b>Notes</b> and <b>Activity</b> share a tab strip that fills the remaining vertical space, so long histories or rich notes no longer push everything else off-screen. You can reorder both groups under <b>Settings → Customize task panel layout…</b>.</li>
+<li><b>Blank dates</b> — Due and Closed date boxes stay blank until you set them; use the <b>Today</b> button to fill with today's date or <b>Clear</b> to empty them again. A blank date saves as "no date" (it does not default to today).</li>
 <li><b>Category / Sub-category / Area</b> — choose vault-specific taxonomy values for each task (Area is the task-level assignment; category/sub-category reflect that hierarchy).</li>
 <li><b>For person</b> — optional attribution for who the task is for (first name, last name, employee ID).</li>
 <li><b>Impact / Urgency / Priority</b> — priority is computed (ServiceNow-style matrix). Use <b>Priority matrix…</b> on the toolbar to pick impact/urgency pairs. Changing I or U writes audit entries and a system note when priority changes.</li>
@@ -26,7 +29,8 @@ ul { padding-left: 1.2em; }
 <h2>Todos</h2>
 <ul>
 <li>Ordered list; <b>Up / Down</b> reorders. Completing todos refreshes next milestone.</li>
-<li>Optional <b>milestone date</b> per todo (YYYY-MM-DD when adding).</li>
+<li>Optional <b>milestone date</b> per todo. When adding or editing, tick <b>Milestone date</b> to set one, or untick to clear it.</li>
+<li><b>Edit a todo</b> — select it and click <b>Edit…</b>, or double-click the row. You can change the title and set / change / clear the milestone; an empty title is ignored (the original title is kept). The parent task's Next milestone updates automatically when the first open todo's milestone changes.</li>
 </ul>
 
 <h2>Notes</h2>
@@ -53,11 +57,46 @@ ul { padding-left: 1.2em; }
 <li><b>Set current task due date to selected day</b> applies the calendar selection to the task selected on the Tasks tab.</li>
 <li>Legend colors; list sorted by priority within a day.</li>
 </ul>
+<h3>Editing a task from the Calendar tab</h3>
+<ul>
+<li><b>Double-click</b> any event in the day list (or highlight it and click <b>Edit selected task…</b>) to open a focused <i>quick-edit</i> dialog. The dialog covers the fields you usually tweak from a calendar view: <b>Status</b>, <b>Due</b>, <b>Closed</b>, <b>Impact</b> / <b>Urgency</b> (with a live priority readout), <b>For person</b>, and <b>Area</b>. Flipping status to <b>Closed</b> from here spawns the next recurring instance just like closing from the Tasks tab.</li>
+<li><b>Todos / milestones inside the dialog</b> — the same quick-edit dialog also embeds the task's todo list so you don't have to switch back to the Tasks tab just to shuffle a milestone. Use <b>Add…</b>, <b>Edit…</b>, <b>Mark done</b>, or <b>Delete</b>; double-click a row to edit it. The <b>Shift selected: N day(s) / Business days / Apply to selection</b> strip above the table shifts <i>only</i> the highlighted rows by the given number of days (business days skips weekends and configured holidays).</li>
+<li><b>Also shift todo milestones</b> — tick the checkbox below the core fields and every attached todo milestone is shifted by the same number of days you just changed the task's Due date by, using business-day math when the <b>Business days</b> sub-toggle is on. Leave the box unticked to move only the task's Due date and leave milestones alone.</li>
+<li><b>Notes snapshot</b> — the lower half of the dialog shows the task's notes (most recent first) as a short read-only list with a snippet. Double-click a line to pop open a read-only viewer with the full content. Editing notes still lives on the Tasks-tab editor — the calendar dialog is a reschedule-oriented surface.</li>
+<li>The title shown in the dialog is read-only — renames belong on the full editor. Use the dialog's <b>Open in Tasks tab for full edit</b> link (or the Calendar tab's <b>Open in Tasks tab</b> button) to jump back to the full editor whenever you need descriptions, blockers, or recurrence.</li>
+<li>If the task you picked isn't visible on the Tasks tab after jumping (for example, your search filter or "Include closed" toggle hides it), you'll get a status-bar nudge to clear the filter.</li>
+</ul>
+
+<h2>Bulk date shifts (re-tasking multiple items at once)</h2>
+<p>When a priority change or outage causes a week or more's worth of rescheduling, the <b>Edit</b> menu has two bulk-shift tools that share a common preview + undo flow. Both are <i>business-day aware</i> by default (skipping weekends and any holidays configured on the <b>Holidays</b> tab).</p>
+<ul>
+<li><b>Edit → Shift selected tasks…</b> — on the Tasks tab, hold <b>Ctrl</b> or <b>Shift</b> to multi-select rows in the task list, then pick this menu (or right-click and choose <b>Shift dates…</b>). You'll be asked for the number of days to move the selection; tick <b>Include todo milestones</b> to fan the same delta out to every todo in the selected tasks.</li>
+<li><b>Edit → Slip schedule from date…</b> — shift every task with a Due date on or after an anchor date by N days at once. Filters let you narrow the scope by <b>For person</b>, <b>Area</b>, <b>Minimum priority</b>, or <b>Status</b>; closed and cancelled tasks are excluded by default.</li>
+<li>In the calendar quick-edit dialog, the <b>Shift selected</b> strip shifts the currently-highlighted todo rows only — useful when you want to re-stagger a couple of milestones without moving the parent task's Due date.</li>
+</ul>
+<p>Every shift shows a <b>preview table</b> first, listing each item that would change, its old date, and its new date. Rows that would land on a weekend, a configured holiday, or that resolve to a no-op (nothing to shift) are tinted so you can spot them before applying. Click <b>Apply</b> to commit or <b>Cancel</b> to back out.</p>
+<p>After applying, <b>Edit → Undo last bulk shift</b> (also <b>Ctrl+Shift+Z</b>, or the same action on the task-list right-click menu) reverts the most recent bulk operation in one click. Undo only covers the <i>last</i> bulk shift; edits you make to those same tasks in between (for example, saving a new Due date from the full editor) are detected and skipped during the revert so they're not accidentally overwritten.</p>
 
 <h2>Reports &amp; export</h2>
+<p>The <b>Reports</b> tab has a list of management-style reports on the left, parameter controls in the middle, a results table, and a small summary panel. Pick a report, adjust the parameters, click <b>Run report</b>. The last-used parameters for each report are remembered between sessions in <code>ui_settings.json</code>.</p>
 <ul>
-<li>Reports tab: overdue, due this week, closure velocity.</li>
-<li><b>File → Export</b> CSV or Excel.</li>
+<li><b>WIP &amp; aging</b> — open tasks bucketed by age in calendar days (<code>0-7 / 8-30 / 31-90 / 90+</code>) cross-tabbed by status and priority. Parameter: <i>As of</i> date.</li>
+<li><b>Throughput</b> — closed-task counts over time, grouped weekly (Mon-Sun) or monthly. Parameters: <i>From</i>, <i>To</i>, <i>Period</i> (weekly/monthly), and an optional <i>Group by</i> split (none, by category, by <b>for-person</b>). "For-person" matches the <i>For person</i> field on the task form — the person the task is <i>for</i>, not the person entering it.</li>
+<li><b>Workload</b> — per <b>for-person</b> open count, overdue count, P1 / P2 counts, oldest received date, and average age. Tasks with no assigned <i>For person</i> appear in a <code>(unassigned)</code> bucket. Parameter: <i>As of</i> date.</li>
+<li><b>SLA performance</b> — for tasks closed in the window, how often the due date was met, average days late, and a per-category breakdown. Closed tasks with no due date are reported separately as <code>no_sla</code> and excluded from the miss-rate math. Parameters: <i>From</i>, <i>To</i>.</li>
+<li><b>Category mix</b> — per category, received vs closed in the window plus current open count, with a net-change column to show which workstreams are growing vs being burned down. Parameters: <i>From</i>, <i>To</i>.</li>
+<li><b>Weekly status</b> — composite "what's closed in the last 7 days, what's open by status, what's due in the next 7 days, and what's currently blocked", sized for an emailable management readout. Parameter: <i>As of</i> date.</li>
+</ul>
+<p>For each report you can:</p>
+<ul>
+<li><b>Export this report (CSV)…</b> — write the rows you just saw to a CSV file (column order matches the table).</li>
+<li><b>Copy summary to clipboard</b> — copy a short multi-line text block (3-10 lines) suitable for pasting into a Teams chat or status email.</li>
+</ul>
+<p>The <b>File</b> menu offers four export pathways:</p>
+<ul>
+<li><b>Export tasks to CSV…</b> / <b>Export tasks to Excel…</b> — flat single-sheet dump of every task, useful as a raw-data feed.</li>
+<li><b>Export rich workbook (xlsx)…</b> — one Excel file with multiple sheets: <i>Summary</i> (KPI block), <i>Tasks</i> (with computed <code>age_days</code>, <code>days_to_due</code>, <code>days_late</code>, <code>was_closed_late</code>), <i>Todos</i>, <i>Notes</i> (HTML stripped to plain text), <i>Activity</i> (audit log), and one sheet per report (<i>WIP_Aging</i>, <i>Throughput_Weekly</i>, <i>Throughput_Monthly</i>, <i>Workload</i>, <i>SLA</i>, <i>CategoryMix</i>, <i>WeeklyStatus</i>). Every data sheet has a frozen header row and an Excel auto-filter so it is immediately ready for sorting and pivoting.</li>
+<li><b>Export reports bundle (CSVs in folder)…</b> — write one CSV per report (<code>wip_aging.csv</code>, <code>throughput_weekly.csv</code>, <code>throughput_monthly.csv</code>, <code>workload.csv</code>, <code>sla.csv</code>, <code>category_mix.csv</code>, <code>weekly_status.csv</code>) into a folder you choose. Use this when you want to email or upload a small set of focused files instead of one large workbook.</li>
 </ul>
 
 <h2>Holidays</h2>
@@ -71,15 +110,44 @@ ul { padding-left: 1.2em; }
 <li>Master password on launch; backup <code>app_data</code> safely.</li>
 </ul>
 
+<h2>Vault persistence and switching</h2>
+<ul>
+<li><b>Remembering the last vault:</b> Task Tracker remembers the folder you opened last and re-opens it automatically on the next launch. No more picking the same folder every run.</li>
+<li><b>Pinning a default vault:</b> In the vault picker, tick <b>Always open this vault on launch</b> before hitting <b>Open</b> / <b>Create</b> to pin it. The app will go straight to that vault on every subsequent start (the login dialog still prompts for the password, of course).</li>
+<li><b>Recent vaults list:</b> The picker has a <b>Recent vaults</b> drop-down that pre-fills the Open / Create path when you pick one. The list holds the last eight vaults you've opened.</li>
+<li><b>Changing your mind:</b> Click <b>Clear pinned default</b> in the vault picker to remove the pinned default. From the login dialog, a <b>Switch vault…</b> button relaunches the app straight into the picker. From the main window, <b>Settings → Switch vault…</b> does the same. Launching with <code>--pick-vault</code> on the command line also forces the picker.</li>
+<li><b>Moved or deleted folders:</b> If the saved vault folder no longer exists, the app falls through to the picker and shows a brief status-bar notice so you know why.</li>
+<li><b>Where this is stored:</b> Launcher state (last opened, pinned default, recents) lives in <code>launcher.json</code> under your OS's standard config folder. It is deliberately kept <i>outside</i> any vault so the app can still launch if the vault folder is unreachable, and so multiple vaults don't race to rewrite each other's launcher state.</li>
+</ul>
+
 <h2>Activity</h2>
 <ul>
 <li><b>Activity</b> on the task panel merges field audit lines and note timeline.</li>
 </ul>
 
+<h2>Notifications</h2>
+<ul>
+<li>Routine confirmations (<i>Task saved</i>, <i>Todo updated</i>, <i>Recurrence settings saved</i>, <i>Due date set to …</i>, export "Saved.", etc.) appear briefly in the <b>status bar</b> at the bottom of the main window (about 4 seconds; the Close-task message stays a bit longer so you can read the new child ticket number). They do not steal focus — you can keep typing or press <b>Ctrl+S</b> again right away.</li>
+<li>Genuine errors, warnings, destructive-action confirmations, and multi-line summaries (for example the reference-data <i>Import complete</i> report) still use pop-up dialogs so you must acknowledge them.</li>
+</ul>
+
+<h2>View</h2>
+<ul>
+<li><b>Theme…</b> — switch the color scheme at any time via <b>View → Theme</b>. Four curated options ship out of the box, all rendered via Qt's Fusion style so every widget (buttons, inputs, checkboxes, date pickers, scrollbars, tabs) picks up the palette uniformly:
+    <ul>
+    <li><b>Light</b> — soft off-white chrome with near-white input fields and a cool muted-blue highlight. First-launch default; balances readability with reduced glare compared to pure white.</li>
+    <li><b>Dark</b> — dark gray backgrounds with light text, tuned for low-light sessions.</li>
+    <li><b>Light gray (reading)</b> — soft gray page background and darker ink text; reduces glare further than <b>Light</b> without the eye fatigue of a full dark theme.</li>
+    <li><b>Sepia (reading)</b> — warm parchment / sienna palette that's easier on the eyes for long reviewing / reading sessions.</li>
+    </ul>
+    The menu entries are radio buttons — picking one unchecks the others. Changes take effect immediately across every open window and dialog and are saved to <code>ui_settings.json</code>, so the next launch reopens in your chosen theme.</li>
+</ul>
+
 <h2>Settings</h2>
 <ul>
-<li><b>Customize task panel layout…</b> — reorder the sections below the core task fields (Todos, Notes, Blockers, Recurring, Activity). Saved per vault in <code>ui_settings.json</code>.</li>
+<li><b>Customize task panel layout…</b> — reorder the sections below the core task fields. The dialog has two independently-reorderable groups: <b>Inline sections</b> (Todos, Blockers, Recurring — always visible) and <b>Tabs</b> (Notes, Activity — share a tab strip). Saved per vault in <code>ui_settings.json</code>.</li>
 <li><b>Keyboard shortcuts…</b> — change shortcuts for New Task, Save Task, and Close Task.</li>
+<li><b>Date format…</b> — choose how dates are displayed throughout the app. Presets include ISO <code>yyyy-MM-dd</code> (default), US <code>MM/dd/yyyy</code>, EU <code>dd/MM/yyyy</code>, short (<code>17 Apr 2026</code>), US long (<code>Apr 17, 2026</code>), and long (<code>17 April 2026</code>). A <b>Custom…</b> option accepts any Qt pattern (tokens: <code>yyyy</code>/<code>yy</code> year, <code>MM</code> month number, <code>MMM</code>/<code>MMMM</code> month name, <code>dd</code>/<code>d</code> day, <code>ddd</code>/<code>dddd</code> weekday); the dialog shows a live preview against today. The format affects date pickers, the Reports table + summary, the Tasks list, status-bar confirmations, milestone and Holidays displays, and the bulk-shift preview. <b>CSV and Excel exports always stay ISO <code>yyyy-MM-dd</code></b> regardless of this setting, so spreadsheets sort dates correctly.</li>
 <li><b>Manage categories and people…</b> — maintain vault-specific Category → Sub-category → Area values and people attribution entries.</li>
 <li><b>Export categories and people…</b> / <b>Import categories and people…</b> — save/load taxonomy + people as JSON for vault synchronization.</li>
 </ul>

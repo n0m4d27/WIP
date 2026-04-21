@@ -141,3 +141,96 @@ def test_reference_data_export_import_roundtrip(svc: TaskService, tmp_path) -> N
     assert summary["areas"] >= 1
     assert summary["people"] >= 1
     assert len([p for p in svc.list_people() if p.employee_id == "E200"]) == 1
+
+
+def test_update_todo_title(svc: TaskService) -> None:
+    t = svc.create_task(title="Parent", received_date=dt.date(2026, 8, 1))
+    todo = svc.add_todo(t.id, title="Draft report", milestone_date=dt.date(2026, 8, 10))
+    assert todo is not None
+    updated = svc.update_todo(todo.id, title="Draft quarterly report")
+    assert updated is not None
+    assert updated.title == "Draft quarterly report"
+    assert updated.milestone_date == dt.date(2026, 8, 10)
+
+
+def test_update_todo_set_milestone_refreshes_next(svc: TaskService) -> None:
+    t = svc.create_task(title="Parent", received_date=dt.date(2026, 8, 1))
+    todo = svc.add_todo(t.id, title="Kickoff")
+    assert todo is not None
+    before = svc.get_task(t.id)
+    assert before is not None
+    assert before.next_milestone_date is None
+    svc.update_todo(todo.id, milestone_date=dt.date(2026, 8, 5))
+    after = svc.get_task(t.id)
+    assert after is not None
+    assert after.next_milestone_date == dt.date(2026, 8, 5)
+
+
+def test_update_todo_clear_milestone(svc: TaskService) -> None:
+    t = svc.create_task(title="Parent", received_date=dt.date(2026, 8, 1))
+    todo = svc.add_todo(t.id, title="Kickoff", milestone_date=dt.date(2026, 8, 5))
+    assert todo is not None
+    svc.update_todo(todo.id, milestone_date=None)
+    reloaded = svc.get_todo(todo.id)
+    assert reloaded is not None
+    assert reloaded.milestone_date is None
+    task = svc.get_task(t.id)
+    assert task is not None
+    assert task.next_milestone_date is None
+
+
+def test_update_todo_missing_returns_none(svc: TaskService) -> None:
+    assert svc.update_todo(999_999, title="nope") is None
+
+
+def test_update_todo_empty_title_is_noop(svc: TaskService) -> None:
+    t = svc.create_task(title="Parent", received_date=dt.date(2026, 8, 1))
+    todo = svc.add_todo(t.id, title="Original")
+    assert todo is not None
+    svc.update_todo(todo.id, title="   ")
+    reloaded = svc.get_todo(todo.id)
+    assert reloaded is not None
+    assert reloaded.title == "Original"
+
+
+def test_update_task_fields_clear_due_and_closed_dates(svc: TaskService) -> None:
+    t = svc.create_task(
+        title="Has dates",
+        received_date=dt.date(2026, 9, 1),
+        due_date=dt.date(2026, 9, 15),
+    )
+    svc.update_task_fields(t.id, closed_date=dt.date(2026, 9, 10))
+    loaded = svc.get_task(t.id)
+    assert loaded is not None and loaded.due_date == dt.date(2026, 9, 15)
+    assert loaded.closed_date == dt.date(2026, 9, 10)
+    svc.update_task_fields(t.id, due_date=None, closed_date=None)
+    cleared = svc.get_task(t.id)
+    assert cleared is not None
+    assert cleared.due_date is None
+    assert cleared.closed_date is None
+
+
+def test_update_task_fields_omitting_date_leaves_it_alone(svc: TaskService) -> None:
+    t = svc.create_task(
+        title="Unchanged dates",
+        received_date=dt.date(2026, 9, 1),
+        due_date=dt.date(2026, 9, 15),
+    )
+    svc.update_task_fields(t.id, title="Renamed")
+    loaded = svc.get_task(t.id)
+    assert loaded is not None
+    assert loaded.title == "Renamed"
+    assert loaded.due_date == dt.date(2026, 9, 15)
+
+
+def test_update_task_fields_clear_description(svc: TaskService) -> None:
+    t = svc.create_task(
+        title="With desc",
+        received_date=dt.date(2026, 9, 1),
+        description="<p>something</p>",
+    )
+    assert t.description == "<p>something</p>"
+    svc.update_task_fields(t.id, description=None)
+    loaded = svc.get_task(t.id)
+    assert loaded is not None
+    assert loaded.description is None

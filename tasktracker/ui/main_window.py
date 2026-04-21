@@ -7,9 +7,18 @@ import json
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QAction, QColor, QKeySequence, QTextCharFormat
+from PySide6.QtCore import QDate, Qt, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QGuiApplication,
+    QKeySequence,
+    QTextCharFormat,
+)
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
     QCalendarWidget,
     QCheckBox,
     QComboBox,
@@ -20,18 +29,24 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QTextEdit,
     QToolBar,
@@ -46,14 +61,42 @@ from tasktracker.db.models import TaskNote
 from tasktracker.domain.enums import RecurrenceGenerationMode, TaskStatus
 from tasktracker.domain.priority import compute_priority, priority_display
 from tasktracker.domain.ticket import format_task_ticket
+from tasktracker.services.excel_export import (
+    build_rich_workbook,
+    write_reports_bundle_csvs,
+)
+from tasktracker.services.reporting_service import ReportingService, ReportResult
+from tasktracker.services.shift_service import ShiftResult
 from tasktracker.services.task_service import TaskService
-from tasktracker.ui.date_widgets import date_edit_with_today_button
+from tasktracker.ui.calendar_quick_edit_dialog import run_calendar_quick_edit_dialog
+from tasktracker.ui.date_format import (
+    format_date as fmt_date,
+    iso_string_to_display,
+    reformat_iso_dates_in_text,
+)
+from tasktracker.ui.date_format_dialog import run_date_format_dialog
+from tasktracker.ui.date_widgets import date_edit_with_today_button, qdate_is_blank
 from tasktracker.ui.keyboard_shortcuts_dialog import run_keyboard_shortcuts_dialog
+from tasktracker.ui.shift_scope_dialog import ShiftScopeDialog
 from tasktracker.ui.priority_matrix_dialog import PriorityMatrixDialog
 from tasktracker.ui.reference_data_dialog import run_manage_reference_data_dialog
-from tasktracker.ui.settings_store import load_ui_settings, normalize_section_order, save_ui_settings
+from tasktracker.ui.settings_store import (
+    TASK_SECTION_LABELS,
+    TASK_SECTION_PLACEMENT,
+    TASK_SECTION_TAB_LABELS,
+    get_date_format_qt,
+    get_report_params,
+    get_theme_id,
+    load_ui_settings,
+    normalize_section_order,
+    save_ui_settings,
+    set_date_format_qt,
+    set_report_params,
+    set_theme_id,
+)
+from tasktracker.ui.themes import apply_theme, list_themes
 from tasktracker.ui.task_panel_layout_dialog import run_task_panel_layout_dialog
-from tasktracker.ui.todo_dialog import run_add_todo_dialog
+from tasktracker.ui.todo_dialog import run_add_todo_dialog, run_edit_todo_dialog
 from tasktracker.ui.user_guide_dialog import run_user_guide_dialog
 
 
@@ -63,6 +106,11 @@ def _qdate_to_py(qd: QDate) -> dt.date:
 
 def _py_to_qdate(d: dt.date) -> QDate:
     return QDate(d.year, d.month, d.day)
+
+
+def _current_date_format_qt(settings: dict) -> str:
+    """Shim so call sites don't need the longer ``get_date_format_qt`` name."""
+    return get_date_format_qt(settings)
 
 
 _HEAD_RE = re.compile(r"<head\b[^>]*>.*?</head>", re.IGNORECASE | re.DOTALL)
@@ -107,6 +155,7 @@ class MainWindow(QMainWindow):
         engine=None,
         secure_shutdown=None,
         parent=None,
+        startup_notice: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Task Tracker (WIP)")
@@ -120,12 +169,22 @@ class MainWindow(QMainWindow):
         self._current_task_id: int | None = None
         self._loading_task_form = False
         self._ui_settings = load_ui_settings()
+        # Cached result of the most recent bulk shift (preview + apply
+        # from ShiftService) so Edit > Undo last bulk shift can reverse
+        # it. Only one level of undo is supported - the UI hides the
+        # entry when this is ``None`` and overwrites it on each new
+        # apply.
+        self._last_bulk_shift: ShiftResult | None = None
 
         self._create_task_actions()
         self._build_ui()
         self._build_menu_toolbar()
         self._apply_task_action_shortcuts()
         self._reload_task_list()
+
+        # Deferred so the status bar exists before the message is shown.
+        if startup_notice:
+            QTimer.singleShot(0, lambda: self._notify(startup_notice, timeout_ms=8000))
 
     def _session_reset(self) -> None:
         self._session.close()
@@ -172,16 +231,44 @@ class MainWindow(QMainWindow):
             sh = act.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
             act.setToolTip(f"{label} ({sh})" if sh else label)
 
+    def _notify(self, msg: str, *, timeout_ms: int = 4000) -> None:
+        """Show a transient non-modal confirmation in the main window status bar.
+
+        Used for routine success / gentle-nudge feedback (Task saved, Select a
+        task first, etc.) in place of blocking ``QMessageBox.information``
+        popups. Errors, warnings, and multi-line summaries still use
+        ``QMessageBox`` so they must be acknowledged.
+        """
+        self.statusBar().showMessage(msg, timeout_ms)
+
     def _apply_task_section_order(self, order: list[str]) -> None:
-        """Reorder movable section group boxes without rebuilding the tab."""
+        """Reorder movable section group boxes without rebuilding the tab.
+
+        Sections flagged as "inline" in :data:`TASK_SECTION_PLACEMENT` go into
+        the stacked VBox below the core fields; "tab" sections go into the
+        shared :class:`QTabWidget`. Each section's order within its own
+        container is preserved from ``order``; cross-container moves are a
+        visual no-op (but the relative order inside each container is kept).
+        """
         if not hasattr(self, "_task_sections_layout") or not hasattr(self, "_section_by_id"):
             return
         norm = normalize_section_order(order)
+
         while self._task_sections_layout.count():
             self._task_sections_layout.takeAt(0)
+        if hasattr(self, "_sections_tabs"):
+            while self._sections_tabs.count():
+                self._sections_tabs.removeTab(0)
+
         for sid in norm:
             w = self._section_by_id.get(sid)
-            if w is not None:
+            if w is None:
+                continue
+            placement = TASK_SECTION_PLACEMENT.get(sid, "inline")
+            if placement == "tab" and hasattr(self, "_sections_tabs"):
+                tab_label = TASK_SECTION_TAB_LABELS.get(sid, TASK_SECTION_LABELS.get(sid, sid))
+                self._sections_tabs.addTab(w, tab_label)
+            else:
                 self._task_sections_layout.addWidget(w)
 
     def _open_task_panel_layout(self) -> None:
@@ -200,6 +287,106 @@ class MainWindow(QMainWindow):
         save_ui_settings(self._ui_settings)
         self._apply_task_action_shortcuts()
 
+    def _build_theme_menu(self, view_menu: QMenu) -> None:
+        """Populate the View menu with a radio group of theme choices.
+
+        The checked action reflects the currently-saved theme so a
+        fresh launch always shows the user's chosen theme ticked.
+        We use :class:`QActionGroup` in exclusive mode so Qt enforces
+        radio-button behavior for us - flipping one theme automatically
+        unchecks the previous one without extra bookkeeping.
+        """
+        theme_menu = view_menu.addMenu("&Theme")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        current_id = get_theme_id(self._ui_settings)
+        self._theme_actions: dict[str, QAction] = {}
+        for theme in list_themes():
+            act = QAction(theme.label, self, checkable=True)
+            act.setToolTip(theme.description)
+            act.setData(theme.id)
+            act.setChecked(theme.id == current_id)
+            # Bind the theme id into the lambda via default argument so the
+            # closure doesn't capture the loop variable by reference.
+            act.triggered.connect(lambda _checked, tid=theme.id: self._on_theme_selected(tid))
+            group.addAction(act)
+            theme_menu.addAction(act)
+            self._theme_actions[theme.id] = act
+
+    def _on_theme_selected(self, theme_id: str) -> None:
+        """Persist and apply the theme chosen from the View menu.
+
+        We update the running ``QApplication`` in place; widgets repaint
+        automatically when ``setPalette`` / ``setStyleSheet`` change.
+        Persisting first ensures a crash after apply still leaves the
+        next launch in the intended state.
+        """
+        if get_theme_id(self._ui_settings) == theme_id:
+            return
+        set_theme_id(self._ui_settings, theme_id)
+        save_ui_settings(self._ui_settings)
+        app = QApplication.instance()
+        theme = apply_theme(app, theme_id) if app is not None else None
+        label = theme.label if theme is not None else theme_id
+        self._notify(f"Theme set to {label}.")
+
+    def _open_date_format_settings(self) -> None:
+        """Prompt for a new date format and apply it live.
+
+        The new format is persisted before we refresh widgets so an
+        exception during the refresh pass (e.g. a dialog being closed
+        mid-refresh) doesn't leave settings and UI out of sync. Every
+        existing ``QDateEdit`` under this window is updated in place,
+        and currently-visible read-only surfaces (Reports table /
+        summary, Tasks list subtitles, Holidays tab) are re-rendered
+        so the change takes effect without requiring a restart.
+        """
+        current = get_date_format_qt(self._ui_settings)
+        chosen = run_date_format_dialog(self, current)
+        if chosen is None or chosen == current:
+            return
+        set_date_format_qt(self._ui_settings, chosen)
+        save_ui_settings(self._ui_settings)
+        self._apply_date_format_to_widgets()
+        self._refresh_date_dependent_surfaces()
+        self._notify(f"Date format set to {chosen}.")
+
+    def _apply_date_format_to_widgets(self) -> None:
+        """Update every ``QDateEdit`` under this window's widget tree."""
+        fmt = get_date_format_qt(self._ui_settings)
+        for de in self.findChildren(QDateEdit):
+            de.setDisplayFormat(fmt)
+
+    def _refresh_date_dependent_surfaces(self) -> None:
+        """Re-render read-only UI surfaces that already cache formatted dates.
+
+        Covered: the Tasks list, the Holidays list, the task detail pane
+        (Next milestone label + todos table), the Reports table + summary
+        panel (if a report has been run this session), and the Calendar
+        day list. Status-bar messages are ephemeral so they naturally pick
+        up the new format on their next call.
+        """
+        try:
+            self._reload_task_list()
+        except AttributeError:
+            pass
+        try:
+            self._reload_holidays_list()
+        except AttributeError:
+            pass
+        if getattr(self, "_current_task_id", None):
+            try:
+                self._load_task_detail()
+            except AttributeError:
+                pass
+        if self._last_report_result is not None:
+            self._render_report_result(self._last_report_result)
+        # Calendar day list reflects the currently-selected day.
+        try:
+            self._on_calendar_date_changed()
+        except AttributeError:
+            pass
+
     def _open_reference_data_manager(self) -> None:
         run_manage_reference_data_dialog(self, self._svc)
         self._reload_task_taxonomy_inputs()
@@ -214,7 +401,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self._svc.export_reference_data(Path(path))
-        QMessageBox.information(self, "Reference data", "Exported.")
+        self._notify("Reference data exported.")
 
     def _import_reference_data(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -241,6 +428,58 @@ class MainWindow(QMainWindow):
             f"People: {summary['people']}",
         )
 
+    def _switch_vault(self) -> None:
+        """Confirm and relaunch the app with the vault picker.
+
+        Secure shutdown (same path as the close button) encrypts the
+        active vault before we spawn a new process with ``--pick-vault``;
+        that new process then runs the picker and unlocks whichever
+        vault the user selects. We shut down the current Qt app after
+        kicking off the relaunch so there's only ever one MainWindow
+        reading from the same SQLite file.
+        """
+        reply = QMessageBox.question(
+            self,
+            "Switch vault",
+            "Close this vault and relaunch with the vault picker?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        # Trigger the same secure shutdown close handler does, then
+        # relaunch and exit. Deferred via a single-shot timer so the
+        # menu click event finishes unwinding before we tear down the
+        # QApplication.
+        import subprocess
+        import sys
+
+        from PySide6.QtWidgets import QApplication
+
+        def relaunch_and_quit() -> None:
+            try:
+                self._session.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+            if self._secure_shutdown is not None:
+                try:
+                    self._secure_shutdown()
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--pick-vault"]
+            else:
+                cmd = [sys.executable, "-m", "tasktracker", "--pick-vault"]
+            try:
+                subprocess.Popen(cmd, close_fds=True)
+            except OSError:
+                pass
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+
+        QTimer.singleShot(0, relaunch_and_quit)
+
     def _build_menu_toolbar(self) -> None:
         tb = QToolBar()
         self.addToolBar(tb)
@@ -251,19 +490,49 @@ class MainWindow(QMainWindow):
         act_matrix.triggered.connect(self._show_matrix)
         tb.addAction(act_matrix)
 
-        m_settings = self.menuBar().addMenu("&Settings")
-        m_settings.addAction("Customize task panel layout…", self._open_task_panel_layout)
-        m_settings.addAction("Keyboard shortcuts…", self._open_keyboard_shortcuts)
-        m_settings.addSeparator()
-        m_settings.addAction("Manage categories and people…", self._open_reference_data_manager)
-        m_settings.addAction("Export categories and people…", self._export_reference_data)
-        m_settings.addAction("Import categories and people…", self._import_reference_data)
-
+        # Menus intentionally added in the standard Windows order
+        # (File, Edit, View, Settings, Help) so the menu bar matches
+        # muscle memory from other apps.
         m_file = self.menuBar().addMenu("&File")
         m_file.addAction("Export tasks to CSV…", self._export_csv)
         m_file.addAction("Export tasks to Excel…", self._export_excel)
         m_file.addSeparator()
+        m_file.addAction("Export rich workbook (xlsx)…", self._export_rich_workbook)
+        m_file.addAction("Export reports bundle (CSVs in folder)…", self._export_reports_bundle)
+        m_file.addSeparator()
         m_file.addAction("Quit", self.close)
+
+        m_edit = self.menuBar().addMenu("&Edit")
+        self.act_shift_selected = QAction("Shift selected tasks…", self)
+        self.act_shift_selected.triggered.connect(self._shift_selected_tasks)
+        m_edit.addAction(self.act_shift_selected)
+        self.act_slip_from_date = QAction("Slip schedule from date…", self)
+        self.act_slip_from_date.triggered.connect(self._slip_schedule_from_date)
+        m_edit.addAction(self.act_slip_from_date)
+        m_edit.addSeparator()
+        self.act_undo_bulk_shift = QAction("Undo last bulk shift", self)
+        self.act_undo_bulk_shift.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        self.act_undo_bulk_shift.setShortcutContext(
+            Qt.ShortcutContext.ApplicationShortcut
+        )
+        self.act_undo_bulk_shift.triggered.connect(self._undo_last_bulk_shift)
+        self.act_undo_bulk_shift.setEnabled(False)
+        self.act_undo_bulk_shift.setToolTip("No bulk shift to undo.")
+        m_edit.addAction(self.act_undo_bulk_shift)
+
+        m_view = self.menuBar().addMenu("&View")
+        self._build_theme_menu(m_view)
+
+        m_settings = self.menuBar().addMenu("&Settings")
+        m_settings.addAction("Customize task panel layout…", self._open_task_panel_layout)
+        m_settings.addAction("Keyboard shortcuts…", self._open_keyboard_shortcuts)
+        m_settings.addAction("Date format…", self._open_date_format_settings)
+        m_settings.addSeparator()
+        m_settings.addAction("Manage categories and people…", self._open_reference_data_manager)
+        m_settings.addAction("Export categories and people…", self._export_reference_data)
+        m_settings.addAction("Import categories and people…", self._import_reference_data)
+        m_settings.addSeparator()
+        m_settings.addAction("Switch vault…", self._switch_vault)
 
         m_help = self.menuBar().addMenu("&Help")
         m_help.addAction("User guide…", self._show_user_guide)
@@ -273,6 +542,11 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         tabs = QTabWidget()
         self.setCentralWidget(tabs)
+        # Tracked so the Calendar tab's "Open in Tasks tab for full edit"
+        # action can switch back without reaching through ``centralWidget``.
+        self._tabs = tabs
+        self._tab_index_tasks = 0
+        self._tab_index_calendar = 1
 
         tabs.addTab(self._build_tasks_tab(), "Tasks")
         tabs.addTab(self._build_calendar_tab(), "Calendar")
@@ -326,7 +600,16 @@ class MainWindow(QMainWindow):
         self.chk_hide_closed.toggled.connect(self._reload_task_list)
         ll.addWidget(self.chk_hide_closed)
         self.task_list = QListWidget()
+        self.task_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         self.task_list.currentItemChanged.connect(self._on_task_selected)
+        # Right-click on the list brings up bulk-edit actions (shift
+        # dates + undo) scoped to the current multi-selection.
+        self.task_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.task_list.customContextMenuRequested.connect(
+            self._on_task_list_context_menu
+        )
         ll.addWidget(self.task_list)
 
         right = QScrollArea()
@@ -352,21 +635,22 @@ class MainWindow(QMainWindow):
         detail_root.addWidget(act_host)
 
         core = QWidget()
-        fl = QFormLayout(core)
+        core_lay = QHBoxLayout(core)
+        core_lay.setContentsMargins(0, 0, 0, 0)
 
         self.lbl_ticket = QLabel("—")
         self.lbl_ticket.setStyleSheet("font-weight: bold;")
         self.f_title = QLineEdit()
         self.f_description = QTextEdit()
         self.f_description.setAcceptRichText(True)
-        self.f_description.setMinimumHeight(80)
+        self.f_description.setMinimumHeight(220)
+        self.f_description.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.f_status = QComboBox()
         for s in TaskStatus:
             self.f_status.addItem(s.value.replace("_", " ").title(), s.value)
 
-        iu_row = QWidget()
-        iu_lay = QHBoxLayout(iu_row)
-        iu_lay.setContentsMargins(0, 0, 0, 0)
         self.f_impact = QSpinBox()
         self.f_impact.setRange(1, 3)
         self.f_impact.setValue(2)
@@ -376,22 +660,26 @@ class MainWindow(QMainWindow):
         self.f_priority_label = QLabel("")
         self.f_impact.valueChanged.connect(self._refresh_priority_label)
         self.f_urgency.valueChanged.connect(self._refresh_priority_label)
-        iu_lay.addWidget(QLabel("Impact"))
-        iu_lay.addWidget(self.f_impact)
-        iu_lay.addWidget(QLabel("Urgency"))
-        iu_lay.addWidget(self.f_urgency)
-        iu_lay.addWidget(QLabel("→"))
-        iu_lay.addWidget(self.f_priority_label)
-        iu_lay.addStretch()
 
-        recv_row, self.f_received = date_edit_with_today_button()
+        status_row = QWidget()
+        status_lay = QHBoxLayout(status_row)
+        status_lay.setContentsMargins(0, 0, 0, 0)
+        status_lay.addWidget(self.f_status, 1)
+        status_lay.addSpacing(12)
+        status_lay.addWidget(QLabel("Impact"))
+        status_lay.addWidget(self.f_impact)
+        status_lay.addWidget(QLabel("Urgency"))
+        status_lay.addWidget(self.f_urgency)
+        status_lay.addWidget(QLabel("→"))
+        status_lay.addWidget(self.f_priority_label)
+
+        fmt = _current_date_format_qt(self._ui_settings)
+        recv_row, self.f_received = date_edit_with_today_button(display_format=fmt)
         self.f_received.setDate(QDate.currentDate())
-        due_row, self.f_due = date_edit_with_today_button()
-        self.f_due.setSpecialValueText("")
-        self.f_due.setDate(QDate.currentDate().addDays(7))
-        closed_row, self.f_closed = date_edit_with_today_button()
-        self.f_closed.setSpecialValueText("—")
-        self.f_closed.setDate(QDate.currentDate())
+        due_row, self.f_due = date_edit_with_today_button(clearable=True, display_format=fmt)
+        closed_row, self.f_closed = date_edit_with_today_button(
+            clearable=True, blank_text="—", display_format=fmt
+        )
 
         self.f_category = QComboBox()
         self.f_subcategory = QComboBox()
@@ -399,22 +687,32 @@ class MainWindow(QMainWindow):
         self.f_person = QComboBox()
         self.f_category.currentIndexChanged.connect(self._on_category_combo_changed)
         self.f_subcategory.currentIndexChanged.connect(self._on_subcategory_combo_changed)
-
-        fl.addRow("Ticket", self.lbl_ticket)
-        fl.addRow("Title", self.f_title)
-        fl.addRow("Description", self.f_description)
-        fl.addRow("Status", self.f_status)
-        fl.addRow("I / U / P", iu_row)
-        fl.addRow("Received", recv_row)
-        fl.addRow("Due", due_row)
-        fl.addRow("Closed", closed_row)
-        fl.addRow("Category", self.f_category)
-        fl.addRow("Sub-category", self.f_subcategory)
-        fl.addRow("Area", self.f_area)
-        fl.addRow("For person", self.f_person)
-
         self.lbl_next_ms = QLabel("—")
-        fl.addRow("Next milestone", self.lbl_next_ms)
+
+        left_col = QWidget()
+        left_form = QFormLayout(left_col)
+        left_form.setContentsMargins(0, 0, 0, 0)
+        left_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        left_form.addRow("Ticket", self.lbl_ticket)
+        left_form.addRow("Title", self.f_title)
+        left_form.addRow("Status / I / U / P", status_row)
+        left_form.addRow("Description", self.f_description)
+
+        right_col = QWidget()
+        right_form = QFormLayout(right_col)
+        right_form.setContentsMargins(0, 0, 0, 0)
+        right_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        right_form.addRow("Received", recv_row)
+        right_form.addRow("Due", due_row)
+        right_form.addRow("Closed", closed_row)
+        right_form.addRow("Category", self.f_category)
+        right_form.addRow("Sub-category", self.f_subcategory)
+        right_form.addRow("Area", self.f_area)
+        right_form.addRow("For person", self.f_person)
+        right_form.addRow("Next milestone", self.lbl_next_ms)
+
+        core_lay.addWidget(left_col, 2)
+        core_lay.addWidget(right_col, 1)
         self._reload_task_taxonomy_inputs()
 
         self._section_by_id: dict[str, QGroupBox] = {}
@@ -422,10 +720,14 @@ class MainWindow(QMainWindow):
         todo_box = QGroupBox("Todos (ordered)")
         todo_l = QVBoxLayout(todo_box)
         self.todo_list = QListWidget()
+        self.todo_list.itemDoubleClicked.connect(lambda _it: self._edit_todo())
         todo_l.addWidget(self.todo_list)
         t_btn = QHBoxLayout()
         self.btn_todo_add = QPushButton("Add todo…")
         self.btn_todo_add.clicked.connect(self._add_todo)
+        self.btn_todo_edit = QPushButton("Edit…")
+        self.btn_todo_edit.setToolTip("Edit the selected todo (title / milestone). Double-click a row to do the same.")
+        self.btn_todo_edit.clicked.connect(self._edit_todo)
         self.btn_todo_done = QPushButton("Mark done")
         self.btn_todo_done.clicked.connect(self._complete_todo)
         self.btn_todo_up = QPushButton("Up")
@@ -433,6 +735,7 @@ class MainWindow(QMainWindow):
         self.btn_todo_dn = QPushButton("Down")
         self.btn_todo_dn.clicked.connect(lambda: self._move_todo(1))
         t_btn.addWidget(self.btn_todo_add)
+        t_btn.addWidget(self.btn_todo_edit)
         t_btn.addWidget(self.btn_todo_done)
         t_btn.addWidget(self.btn_todo_up)
         t_btn.addWidget(self.btn_todo_dn)
@@ -446,8 +749,11 @@ class MainWindow(QMainWindow):
         note_l.addWidget(self.note_list)
         self.note_editor = QTextEdit()
         self.note_editor.setAcceptRichText(True)
-        self.note_editor.setMinimumHeight(120)
-        note_l.addWidget(self.note_editor)
+        self.note_editor.setMinimumHeight(160)
+        self.note_editor.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        note_l.addWidget(self.note_editor, 1)
         n_btn = QHBoxLayout()
         self.btn_note_new = QPushButton("New note")
         self.btn_note_new.clicked.connect(self._new_note)
@@ -506,8 +812,10 @@ class MainWindow(QMainWindow):
         tl_l = QVBoxLayout(tl_box)
         self.timeline = QPlainTextEdit()
         self.timeline.setReadOnly(True)
-        self.timeline.setMaximumHeight(160)
-        tl_l.addWidget(self.timeline)
+        self.timeline.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        tl_l.addWidget(self.timeline, 1)
         btn_tl = QPushButton("Refresh timeline")
         btn_tl.clicked.connect(self._refresh_timeline)
         tl_l.addWidget(btn_tl)
@@ -516,13 +824,16 @@ class MainWindow(QMainWindow):
         self._sections_host = QWidget()
         self._task_sections_layout = QVBoxLayout(self._sections_host)
         self._task_sections_layout.setContentsMargins(0, 0, 0, 0)
-        for sid in self._ui_settings["task_panel_section_order"]:
-            bx = self._section_by_id.get(sid)
-            if bx is not None:
-                self._task_sections_layout.addWidget(bx)
+
+        self._sections_tabs = QTabWidget()
+        self._sections_tabs.setDocumentMode(True)
+        self._sections_tabs.setMinimumHeight(320)
+
+        self._apply_task_section_order(self._ui_settings["task_panel_section_order"])
 
         detail_root.addWidget(core)
         detail_root.addWidget(self._sections_host)
+        detail_root.addWidget(self._sections_tabs, 1)
 
         right.setWidget(detail)
         split.addWidget(left)
@@ -577,6 +888,23 @@ class MainWindow(QMainWindow):
         self.btn_apply_due = QPushButton("Set current task due date to selected day")
         self.btn_apply_due.clicked.connect(self._apply_calendar_to_due)
         tg.addWidget(self.btn_apply_due)
+        # Edit / jump buttons act on the highlighted event in the
+        # right-hand list (or fall back to the currently-selected task on
+        # the Tasks tab if the list is empty for the day). Double-clicking
+        # an event row also opens the quick-edit dialog.
+        self.btn_cal_quick_edit = QPushButton("Edit selected task…")
+        self.btn_cal_quick_edit.setToolTip(
+            "Open a focused quick-edit dialog for the highlighted task. "
+            "You can also double-click the event in the list."
+        )
+        self.btn_cal_quick_edit.clicked.connect(self._calendar_quick_edit_selected)
+        tg.addWidget(self.btn_cal_quick_edit)
+        self.btn_cal_open_in_tasks = QPushButton("Open in Tasks tab")
+        self.btn_cal_open_in_tasks.setToolTip(
+            "Switch to the Tasks tab and select this task for full editing."
+        )
+        self.btn_cal_open_in_tasks.clicked.connect(self._calendar_open_in_tasks_selected)
+        tg.addWidget(self.btn_cal_open_in_tasks)
         cal_side.addWidget(toggles)
 
         legend = QLabel(
@@ -595,6 +923,7 @@ class MainWindow(QMainWindow):
         lay.addLayout(cal_side, 1)
 
         self.cal_event_list = QListWidget()
+        self.cal_event_list.itemDoubleClicked.connect(self._calendar_event_double_clicked)
         lay.addWidget(self.cal_event_list, 1)
         self._on_calendar_date_changed()
         return w
@@ -604,24 +933,334 @@ class MainWindow(QMainWindow):
         self.cal_widget.setSelectedDate(today)
         self.cal_widget.setCurrentPage(today.year(), today.month())
 
+    # ------------------------------------------------------------------
+    # Reports tab
+    # ------------------------------------------------------------------
+
+    # Display labels for the report list. Order is the order shown in the UI.
+    REPORT_LIST: tuple[tuple[str, str], ...] = (
+        ("wip_aging", "WIP & aging"),
+        ("throughput", "Throughput"),
+        ("workload", "Workload"),
+        ("sla", "SLA performance"),
+        ("category_mix", "Category mix"),
+        ("weekly_status", "Weekly status"),
+    )
+
     def _build_reports_tab(self) -> QWidget:
         w = QWidget()
-        lay = QVBoxLayout(w)
-        self.report_out = QPlainTextEdit()
-        self.report_out.setReadOnly(True)
-        lay.addWidget(self.report_out)
-        row = QHBoxLayout()
-        b1 = QPushButton("Overdue (open)")
-        b1.clicked.connect(self._run_report_overdue)
-        b2 = QPushButton("Due in next 7 days")
-        b2.clicked.connect(self._run_report_week)
-        b3 = QPushButton("Closure velocity (30d)")
-        b3.clicked.connect(self._run_report_velocity)
-        row.addWidget(b1)
-        row.addWidget(b2)
-        row.addWidget(b3)
-        lay.addLayout(row)
+        outer = QHBoxLayout(w)
+
+        # Left: report picker.
+        self.reports_list = QListWidget()
+        for rid, label in self.REPORT_LIST:
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, rid)
+            self.reports_list.addItem(item)
+        self.reports_list.setMaximumWidth(220)
+        self.reports_list.currentRowChanged.connect(self._on_report_selected)
+        outer.addWidget(self.reports_list)
+
+        # Right: param panel + run controls + table + summary.
+        right = QVBoxLayout()
+
+        self.reports_param_stack = QStackedWidget()
+        self._report_param_widgets: dict[str, dict[str, QWidget]] = {}
+        for rid, _label in self.REPORT_LIST:
+            page, controls = self._build_report_param_page(rid)
+            self._report_param_widgets[rid] = controls
+            self.reports_param_stack.addWidget(page)
+        right.addWidget(self.reports_param_stack)
+
+        # Action buttons (Run / Export / Copy).
+        actions = QHBoxLayout()
+        self.btn_report_run = QPushButton("Run report")
+        self.btn_report_run.clicked.connect(self._run_selected_report)
+        self.btn_report_export_csv = QPushButton("Export this report (CSV)…")
+        self.btn_report_export_csv.clicked.connect(self._export_current_report_csv)
+        self.btn_report_export_csv.setEnabled(False)
+        self.btn_report_copy_summary = QPushButton("Copy summary to clipboard")
+        self.btn_report_copy_summary.clicked.connect(self._copy_current_report_summary)
+        self.btn_report_copy_summary.setEnabled(False)
+        actions.addWidget(self.btn_report_run)
+        actions.addWidget(self.btn_report_export_csv)
+        actions.addWidget(self.btn_report_copy_summary)
+        actions.addStretch(1)
+        right.addLayout(actions)
+
+        # Result table.
+        self.reports_table = QTableWidget(0, 0)
+        self.reports_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.reports_table.horizontalHeader().setStretchLastSection(True)
+        self.reports_table.verticalHeader().setVisible(False)
+        right.addWidget(self.reports_table, 3)
+
+        # Summary box (compact, read-only).
+        self.reports_summary = QPlainTextEdit()
+        self.reports_summary.setReadOnly(True)
+        self.reports_summary.setMaximumHeight(140)
+        right.addWidget(self.reports_summary, 1)
+
+        outer.addLayout(right, 1)
+
+        # Last-rendered report cached so the export / copy buttons don't
+        # re-query the database (and so the user can re-export the exact
+        # rows they just saw).
+        self._last_report_id: str | None = None
+        self._last_report_result: ReportResult | None = None
+
+        # Default selection: first report. This also triggers
+        # ``_on_report_selected`` which restores last-used params.
+        self.reports_list.setCurrentRow(0)
         return w
+
+    def _build_report_param_page(
+        self, report_id: str
+    ) -> tuple[QWidget, dict[str, QWidget]]:
+        """Build a single page in the Reports param stack and return the
+        page widget plus a dict of named controls so the run handler can
+        read the current values back out without touching the layout."""
+        page = QWidget()
+        form = QFormLayout(page)
+        # Labels align right so the short input pills below them line up
+        # tidily in column 2, and the row doesn't stretch the field to the
+        # full width of the (wide) Reports pane.
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        controls: dict[str, QWidget] = {}
+        today = QDate.currentDate()
+        first_of_month = QDate(today.year(), today.month(), 1)
+        fmt = _current_date_format_qt(self._ui_settings)
+
+        def _compact(w: QWidget) -> QWidget:
+            """Wrap ``w`` so its form row sits at its natural size with a
+            trailing stretch, instead of stretching across the whole pane.
+            Keeps the calendar-popup button right next to the field."""
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(w)
+            lay.addStretch(1)
+            return row
+
+        if report_id in ("wip_aging", "workload", "weekly_status"):
+            de = QDateEdit(today)
+            de.setCalendarPopup(True)
+            de.setDisplayFormat(fmt)
+            de.setMinimumWidth(140)
+            controls["as_of"] = de
+            form.addRow("As of:", _compact(de))
+        elif report_id in ("throughput", "sla", "category_mix"):
+            de_from = QDateEdit(first_of_month)
+            de_from.setCalendarPopup(True)
+            de_from.setDisplayFormat(fmt)
+            de_from.setMinimumWidth(140)
+            de_to = QDateEdit(today)
+            de_to.setCalendarPopup(True)
+            de_to.setDisplayFormat(fmt)
+            de_to.setMinimumWidth(140)
+            controls["from"] = de_from
+            controls["to"] = de_to
+            form.addRow("From:", _compact(de_from))
+            form.addRow("To:", _compact(de_to))
+            if report_id == "throughput":
+                period = QComboBox()
+                period.addItem("Weekly (Mon-Sun)", "week")
+                period.addItem("Monthly", "month")
+                period.setMinimumWidth(180)
+                controls["period"] = period
+                form.addRow("Period:", _compact(period))
+                grp = QComboBox()
+                grp.addItem("No split", "none")
+                grp.addItem("By category", "category")
+                grp.addItem("By for-person", "for_person")
+                grp.setMinimumWidth(180)
+                controls["group_by"] = grp
+                form.addRow("Group by:", _compact(grp))
+        else:  # defensive: unknown report -> empty page
+            form.addRow(QLabel("(no parameters)"))
+        return page, controls
+
+    def _current_report_id(self) -> str | None:
+        item = self.reports_list.currentItem()
+        if item is None:
+            return None
+        return str(item.data(Qt.ItemDataRole.UserRole))
+
+    def _on_report_selected(self, _row: int) -> None:
+        rid = self._current_report_id()
+        if rid is None:
+            return
+        index = next((i for i, (r, _l) in enumerate(self.REPORT_LIST) if r == rid), 0)
+        self.reports_param_stack.setCurrentIndex(index)
+        self._restore_report_params(rid)
+
+    def _restore_report_params(self, report_id: str) -> None:
+        params = get_report_params(self._ui_settings, report_id)
+        if not params:
+            return
+        controls = self._report_param_widgets.get(report_id, {})
+
+        def _apply_date(key: str) -> None:
+            raw = params.get(key)
+            if isinstance(raw, str):
+                try:
+                    d = dt.date.fromisoformat(raw)
+                except ValueError:
+                    return
+                w = controls.get(key)
+                if isinstance(w, QDateEdit):
+                    w.setDate(_py_to_qdate(d))
+
+        for key in ("as_of", "from", "to"):
+            if key in controls:
+                _apply_date(key)
+        for combo_key in ("period", "group_by"):
+            w = controls.get(combo_key)
+            raw = params.get(combo_key)
+            if isinstance(w, QComboBox) and isinstance(raw, str):
+                idx = w.findData(raw)
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
+
+    def _collect_report_params(self, report_id: str) -> dict[str, object]:
+        controls = self._report_param_widgets.get(report_id, {})
+        out: dict[str, object] = {}
+        for key, w in controls.items():
+            if isinstance(w, QDateEdit):
+                out[key] = _qdate_to_py(w.date()).isoformat()
+            elif isinstance(w, QComboBox):
+                out[key] = w.currentData()
+        return out
+
+    def _run_selected_report(self) -> None:
+        rid = self._current_report_id()
+        if rid is None:
+            self._notify("Pick a report first.")
+            return
+        params = self._collect_report_params(rid)
+        # Persist last-used params for this report so the next session opens
+        # to the same view; failures here are non-fatal.
+        try:
+            set_report_params(self._ui_settings, rid, params)
+            save_ui_settings(self._ui_settings)
+        except OSError:
+            pass
+
+        rs = ReportingService(self._svc.session)
+        try:
+            result = self._dispatch_report(rs, rid, params)
+        except (ValueError, TypeError) as exc:
+            QMessageBox.warning(self, "Report failed", str(exc))
+            return
+
+        self._last_report_id = rid
+        self._last_report_result = result
+        self._render_report_result(result)
+        self.btn_report_export_csv.setEnabled(True)
+        self.btn_report_copy_summary.setEnabled(True)
+        self._notify(f"{result.name}: {len(result.rows)} row(s).")
+
+    def _dispatch_report(
+        self, rs: ReportingService, report_id: str, params: dict[str, object]
+    ) -> ReportResult:
+        def _date(key: str, default: dt.date) -> dt.date:
+            raw = params.get(key)
+            if isinstance(raw, str):
+                try:
+                    return dt.date.fromisoformat(raw)
+                except ValueError:
+                    return default
+            return default
+
+        today = dt.date.today()
+        if report_id == "wip_aging":
+            return rs.wip_aging(as_of=_date("as_of", today))
+        if report_id == "workload":
+            return rs.workload(as_of=_date("as_of", today))
+        if report_id == "weekly_status":
+            return rs.weekly_status(as_of=_date("as_of", today))
+        if report_id == "throughput":
+            period = params.get("period") or "week"
+            group_by = params.get("group_by") or "none"
+            return rs.throughput(
+                from_date=_date("from", today.replace(day=1)),
+                to_date=_date("to", today),
+                period=str(period),
+                group_by=str(group_by),
+            )
+        if report_id == "sla":
+            return rs.sla(
+                from_date=_date("from", today.replace(day=1)),
+                to_date=_date("to", today),
+            )
+        if report_id == "category_mix":
+            return rs.category_mix(
+                from_date=_date("from", today.replace(day=1)),
+                to_date=_date("to", today),
+            )
+        raise ValueError(f"Unknown report id: {report_id}")
+
+    def _render_report_result(self, result: ReportResult) -> None:
+        cols = result.columns
+        self.reports_table.clear()
+        self.reports_table.setColumnCount(len(cols))
+        self.reports_table.setHorizontalHeaderLabels(cols)
+        self.reports_table.setRowCount(len(result.rows))
+        # Reports ship date cells as ISO strings so the CSV / Excel exports
+        # stay unambiguous; for the on-screen table we reformat any
+        # ``YYYY-MM-DD`` values to the user's chosen display format.
+        fmt = _current_date_format_qt(self._ui_settings)
+        for r, row in enumerate(result.rows):
+            for c, key in enumerate(cols):
+                value = row.get(key, "")
+                if value is None:
+                    text = ""
+                elif isinstance(value, str):
+                    text = iso_string_to_display(value, fmt)
+                else:
+                    text = str(value)
+                item = QTableWidgetItem(text)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.reports_table.setItem(r, c, item)
+        self.reports_table.resizeColumnsToContents()
+        self.reports_summary.setPlainText(
+            reformat_iso_dates_in_text(result.summary or "", fmt)
+        )
+
+    def _export_current_report_csv(self) -> None:
+        if self._last_report_result is None:
+            self._notify("Run a report first.")
+            return
+        result = self._last_report_result
+        suggested = f"{self._last_report_id or 'report'}.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export report to CSV", suggested, "CSV (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            import csv
+
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=result.columns)
+                writer.writeheader()
+                for row in result.rows:
+                    writer.writerow({k: row.get(k, "") for k in result.columns})
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self._notify(f"Exported {len(result.rows)} row(s) to CSV.")
+
+    def _copy_current_report_summary(self) -> None:
+        if self._last_report_result is None:
+            self._notify("Run a report first.")
+            return
+        text = self._last_report_result.summary or self._last_report_result.name
+        clip = QGuiApplication.clipboard()
+        if clip is not None:
+            clip.setText(text)
+        self._notify("Summary copied to clipboard.")
 
     def _build_holidays_tab(self) -> QWidget:
         w = QWidget()
@@ -745,9 +1384,10 @@ class MainWindow(QMainWindow):
         self.task_list.blockSignals(True)
         try:
             self.task_list.clear()
+            fmt = _current_date_format_qt(self._ui_settings)
             for t in self._tasks_for_sidebar():
                 pr = priority_display(t.priority)
-                due = t.due_date.isoformat() if t.due_date else "no due"
+                due = fmt_date(t.due_date, fmt) if t.due_date else "no due"
                 tk = format_task_ticket(t.ticket_number)
                 self.task_list.addItem(f"{tk} [{pr}] {t.title} — {due} ({t.status})")
                 it = self.task_list.item(self.task_list.count() - 1)
@@ -811,18 +1451,19 @@ class MainWindow(QMainWindow):
         if task.due_date:
             self.f_due.setDate(_py_to_qdate(task.due_date))
         else:
-            self.f_due.setDate(QDate.currentDate())
+            self.f_due.setDate(self.f_due.minimumDate())
         if task.closed_date:
             self.f_closed.setDate(_py_to_qdate(task.closed_date))
         else:
-            self.f_closed.setDate(QDate.currentDate())
+            self.f_closed.setDate(self.f_closed.minimumDate())
+        fmt = _current_date_format_qt(self._ui_settings)
         self.lbl_next_ms.setText(
-            task.next_milestone_date.isoformat() if task.next_milestone_date else "—"
+            fmt_date(task.next_milestone_date, fmt) if task.next_milestone_date else "—"
         )
 
         self.todo_list.clear()
         for td in sorted(task.todos, key=lambda x: x.sort_order):
-            ms = td.milestone_date.isoformat() if td.milestone_date else ""
+            ms = fmt_date(td.milestone_date, fmt) if td.milestone_date else ""
             done = "✓ " if td.completed_at else ""
             self.todo_list.addItem(f"{done}{td.title} [{ms}]")
             it = self.todo_list.item(self.todo_list.count() - 1)
@@ -883,33 +1524,49 @@ class MainWindow(QMainWindow):
 
     def _save_task_detail(self) -> None:
         if self._current_task_id is None:
-            QMessageBox.information(self, "Save", "Select a task first.")
+            self._notify("Select a task first.")
             return
-        due = self.f_due.date()
-        due_py = _qdate_to_py(due) if due.isValid() else None
-        closed = self.f_closed.date()
-        closed_py = _qdate_to_py(closed) if closed.isValid() else None
+        due_py = None if qdate_is_blank(self.f_due) else _qdate_to_py(self.f_due.date())
+        closed_py = (
+            None if qdate_is_blank(self.f_closed) else _qdate_to_py(self.f_closed.date())
+        )
         st = self.f_status.currentData()
         desc_html = self.f_description.toHtml()
         desc_plain = self.f_description.toPlainText().strip()
         if not desc_plain:
             desc_html = None
+
+        existing = self._svc.get_task(self._current_task_id)
+        was_closed = existing is not None and existing.status == TaskStatus.CLOSED
+        closing_now = (st == TaskStatus.CLOSED) and not was_closed
+
         self._svc.update_task_fields(
             self._current_task_id,
             title=self.f_title.text(),
             description=desc_html,
-            status=st,
+            status=None if closing_now else st,
             impact=self.f_impact.value(),
             urgency=self.f_urgency.value(),
             received_date=_qdate_to_py(self.f_received.date()),
             due_date=due_py,
-            closed_date=closed_py if st == TaskStatus.CLOSED else None,
+            closed_date=closed_py if (st == TaskStatus.CLOSED and not closing_now) else None,
             area_id=self._combo_current_int(self.f_area),
             person_id=self._combo_current_int(self.f_person),
         )
+
+        new_t = None
+        if closing_now:
+            _, new_t = self._svc.close_task(self._current_task_id, closed_on=closed_py)
+
         self._reload_task_list()
         self._load_task_detail()
-        QMessageBox.information(self, "Save", "Task saved.")
+        if closing_now:
+            msg = "Task closed."
+            if new_t is not None:
+                msg += f" Created successor {format_task_ticket(new_t.ticket_number)} (id {new_t.id})."
+            self._notify(msg, timeout_ms=6000)
+        else:
+            self._notify("Task saved.")
 
     def _close_current_task(self) -> None:
         if self._current_task_id is None:
@@ -918,7 +1575,7 @@ class MainWindow(QMainWindow):
         msg = "Task closed."
         if new_t:
             msg += f" Created successor {format_task_ticket(new_t.ticket_number)} (id {new_t.id})."
-        QMessageBox.information(self, "Close", msg)
+        self._notify(msg, timeout_ms=6000)
         self._reload_task_list()
         self._load_task_detail()
 
@@ -926,11 +1583,11 @@ class MainWindow(QMainWindow):
         d = QDialog(self)
         d.setWindowTitle("New Task")
         form = QFormLayout(d)
+        fmt = _current_date_format_qt(self._ui_settings)
         title = QLineEdit()
-        recv_row, recv = date_edit_with_today_button(d)
+        recv_row, recv = date_edit_with_today_button(d, display_format=fmt)
         recv.setDate(QDate.currentDate())
-        due_row, due = date_edit_with_today_button(d)
-        due.setDate(QDate.currentDate().addDays(7))
+        due_row, due = date_edit_with_today_button(d, clearable=True, display_format=fmt)
         form.addRow("Title", title)
         form.addRow("Received", recv_row)
         form.addRow("Due", due_row)
@@ -945,7 +1602,7 @@ class MainWindow(QMainWindow):
         t = self._svc.create_task(
             title=title.text(),
             received_date=_qdate_to_py(recv.date()),
-            due_date=_qdate_to_py(due.date()),
+            due_date=None if qdate_is_blank(due) else _qdate_to_py(due.date()),
         )
         self._reload_task_list()
         for i in range(self.task_list.count()):
@@ -978,6 +1635,31 @@ class MainWindow(QMainWindow):
             self._load_task_detail()
             self._reload_task_list()
             self._select_list_item_by_id(self.todo_list, keep_id)
+
+    def _edit_todo(self) -> None:
+        it = self.todo_list.currentItem()
+        if not it:
+            self._notify("Select a todo to edit.")
+            return
+        tid = it.data(Qt.ItemDataRole.UserRole)
+        if not tid:
+            return
+        current = self._svc.get_todo(int(tid))
+        if current is None:
+            return
+        result = run_edit_todo_dialog(
+            self,
+            current_title=current.title,
+            current_milestone=current.milestone_date,
+        )
+        if result is None:
+            return
+        new_title, new_ms = result
+        self._svc.update_todo(int(tid), title=new_title, milestone_date=new_ms)
+        self._load_task_detail()
+        self._reload_task_list()
+        self._select_list_item_by_id(self.todo_list, int(tid))
+        self._notify("Todo updated.")
 
     def _move_todo(self, delta: int) -> None:
         it = self.todo_list.currentItem()
@@ -1025,7 +1707,7 @@ class MainWindow(QMainWindow):
         if not it:
             return
         if it.data(Qt.ItemDataRole.UserRole + 1):
-            QMessageBox.information(self, "Note", "System notes are not editable here.")
+            self._notify("System notes are not editable here.")
             return
         nid = it.data(Qt.ItemDataRole.UserRole)
         if nid:
@@ -1065,7 +1747,7 @@ class MainWindow(QMainWindow):
             return
         if not self.rec_enable.isChecked():
             self._svc.clear_recurring_rule(self._current_task_id)
-            QMessageBox.information(self, "Recurrence", "Recurring disabled for this task.")
+            self._notify("Recurring disabled for this task.")
             self._load_task_detail()
             return
         mode = self.rec_mode.currentData()
@@ -1095,7 +1777,7 @@ class MainWindow(QMainWindow):
             interval_days=interval,
             todo_templates=templates,
         )
-        QMessageBox.information(self, "Recurrence", "Recurrence settings saved.")
+        self._notify("Recurrence settings saved.")
         self._load_task_detail()
 
     def _refresh_timeline(self) -> None:
@@ -1167,41 +1849,88 @@ class MainWindow(QMainWindow):
 
     def _apply_calendar_to_due(self) -> None:
         if self._current_task_id is None:
-            QMessageBox.information(self, "Calendar", "Select a task on the Tasks tab first.")
+            self._notify("Select a task on the Tasks tab first.")
             return
         day = _qdate_to_py(self.cal_widget.selectedDate())
         self._svc.update_task_fields(self._current_task_id, due_date=day)
         self._reload_task_list()
         self._on_calendar_date_changed()
-        QMessageBox.information(self, "Calendar", f"Due date set to {day.isoformat()}.")
+        self._notify(f"Due date set to {fmt_date(day, _current_date_format_qt(self._ui_settings))}.")
 
-    def _run_report_overdue(self) -> None:
-        rows = self._svc.report_overdue()
-        lines = [f"Overdue ({len(rows)} open tasks):"]
-        for t in sorted(rows, key=lambda x: (x.priority, x.due_date or dt.date.min)):
-            lines.append(f"  P{t.priority} — {t.title} (due {t.due_date})")
-        self.report_out.setPlainText("\n".join(lines) if lines else "None.")
+    # -- Calendar -> task editing ---------------------------------------
 
-    def _run_report_week(self) -> None:
-        rows = self._svc.report_due_this_week()
-        lines = [f"Due in next 7 days ({len(rows)}):"]
-        for t in sorted(rows, key=lambda x: (x.due_date or dt.date.max, x.priority)):
-            lines.append(f"  P{t.priority} — {t.title} (due {t.due_date})")
-        self.report_out.setPlainText("\n".join(lines) if lines else "None.")
+    def _calendar_selected_task_id(self) -> int | None:
+        """Return the task id for the highlighted event in the calendar's
+        right-hand list, or ``None`` when no event row is selected."""
+        item = self.cal_event_list.currentItem()
+        if item is None:
+            return None
+        raw = item.data(Qt.ItemDataRole.UserRole)
+        return int(raw) if raw is not None else None
 
-    def _run_report_velocity(self) -> None:
-        r = self._svc.report_closure_velocity(30)
-        self.report_out.setPlainText(
-            f"Closed in last {r['days_window']} days (since {r['since']}): {r['closed_count']} tasks."
+    def _calendar_event_double_clicked(self, item: QListWidgetItem) -> None:
+        raw = item.data(Qt.ItemDataRole.UserRole)
+        if raw is None:
+            return
+        self._open_calendar_quick_edit(int(raw))
+
+    def _calendar_quick_edit_selected(self) -> None:
+        tid = self._calendar_selected_task_id()
+        if tid is None:
+            self._notify("Pick an event in the day list first.")
+            return
+        self._open_calendar_quick_edit(tid)
+
+    def _calendar_open_in_tasks_selected(self) -> None:
+        tid = self._calendar_selected_task_id()
+        if tid is None:
+            self._notify("Pick an event in the day list first.")
+            return
+        self._jump_to_task_in_tasks_tab(tid)
+
+    def _open_calendar_quick_edit(self, task_id: int) -> None:
+        """Open the quick-edit modal for the given task. After save, refresh
+        both the calendar list and the Tasks-tab list. If the user clicked
+        the dialog's "Open in Tasks tab for full edit" link instead, jump
+        to the Tasks tab and select the task there."""
+        saved, successor, open_full = run_calendar_quick_edit_dialog(
+            self, self._svc, task_id
         )
+        if open_full:
+            self._jump_to_task_in_tasks_tab(task_id)
+            return
+        if not saved:
+            return
+        self._reload_task_list()
+        self._on_calendar_date_changed()
+        if successor is not None:
+            ticket = format_task_ticket(successor.ticket_number)
+            self._notify(
+                f"Task closed. Created successor {ticket} (id {successor.id}).",
+                timeout_ms=6000,
+            )
+        else:
+            self._notify("Task saved.")
+
+    def _jump_to_task_in_tasks_tab(self, task_id: int) -> None:
+        """Switch the central tab widget to the Tasks tab and highlight
+        ``task_id`` in the task list. No-op (with a status notification)
+        when the task can't be found - e.g. it was filtered out by the
+        current search/closed-only toggle."""
+        self._tabs.setCurrentIndex(self._tab_index_tasks)
+        if not self._select_list_item_by_id(self.task_list, task_id):
+            self._notify(
+                "Task not visible in current Tasks list (try clearing search filters)."
+            )
 
     def _reload_holidays_list(self) -> None:
         selected = self.holiday_table.currentItem()
         selected_id = int(selected.data(Qt.ItemDataRole.UserRole)) if selected else None
         self.holiday_table.clear()
+        fmt = _current_date_format_qt(self._ui_settings)
         for h in self._svc.list_holidays():
             label = h.label or ""
-            self.holiday_table.addItem(f"{h.holiday_date.isoformat()}  {label}")
+            self.holiday_table.addItem(f"{fmt_date(h.holiday_date, fmt)}  {label}")
             it = self.holiday_table.item(self.holiday_table.count() - 1)
             it.setData(Qt.ItemDataRole.UserRole, h.id)
         if not self._select_list_item_by_id(self.holiday_table, selected_id):
@@ -1213,7 +1942,7 @@ class MainWindow(QMainWindow):
         d.setWindowTitle("Add holiday")
         lay = QVBoxLayout(d)
         form = QFormLayout()
-        date_row, de = date_edit_with_today_button(d)
+        date_row, de = date_edit_with_today_button(d, display_format=_current_date_format_qt(self._ui_settings))
         de.setDate(QDate.currentDate())
         label = QLineEdit()
         form.addRow("Date", date_row)
@@ -1250,14 +1979,46 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self._svc.export_tasks_csv(Path(path))
-        QMessageBox.information(self, "Export", "Saved.")
+        self._notify("CSV export saved.")
 
     def _export_excel(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export Excel", "", "Excel (*.xlsx)")
         if not path:
             return
         self._svc.export_tasks_excel(Path(path))
-        QMessageBox.information(self, "Export", "Saved.")
+        self._notify("Excel export saved.")
+
+    def _export_rich_workbook(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export rich workbook",
+            "task_tracker_workbook.xlsx",
+            "Excel (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            written = build_rich_workbook(self._svc.session, Path(path))
+        except OSError as exc:
+            QMessageBox.warning(self, "Workbook export failed", str(exc))
+            return
+        self._notify(f"Rich workbook saved: {written.name}", timeout_ms=6000)
+
+    def _export_reports_bundle(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose folder for reports bundle"
+        )
+        if not folder:
+            return
+        try:
+            written = write_reports_bundle_csvs(self._svc.session, Path(folder))
+        except OSError as exc:
+            QMessageBox.warning(self, "Reports bundle failed", str(exc))
+            return
+        self._notify(
+            f"Reports bundle saved: {len(written)} CSV(s) in {folder}",
+            timeout_ms=6000,
+        )
 
     def _show_matrix(self) -> None:
         PriorityMatrixDialog(self).exec()
@@ -1271,6 +2032,88 @@ class MainWindow(QMainWindow):
             "About",
             "Task Tracker (WIP)\nDesktop task tracking — Python 3.11, PySide6, SQLite.",
         )
+
+    # ------------------------------------------------------------------
+    # Bulk-shift entry points
+    # ------------------------------------------------------------------
+
+    def _selected_task_ids(self) -> list[int]:
+        """Return task ids for every currently highlighted row in the
+        Tasks-tab list (respecting the multi-select mode)."""
+        ids: list[int] = []
+        for it in self.task_list.selectedItems():
+            raw = it.data(Qt.ItemDataRole.UserRole)
+            if raw is not None:
+                ids.append(int(raw))
+        return ids
+
+    def _on_task_list_context_menu(self, point) -> None:
+        """Show a right-click menu with bulk-shift actions anchored at
+        the cursor's position inside the task list."""
+        menu = QMenu(self.task_list)
+        ids = self._selected_task_ids()
+        act_shift = menu.addAction(f"Shift dates… ({len(ids)} selected)")
+        act_shift.setEnabled(bool(ids))
+        act_shift.triggered.connect(self._shift_selected_tasks)
+        menu.addSeparator()
+        act_undo = menu.addAction("Undo last bulk shift")
+        act_undo.setEnabled(self._last_bulk_shift is not None)
+        act_undo.triggered.connect(self._undo_last_bulk_shift)
+        menu.exec(self.task_list.mapToGlobal(point))
+
+    def _shift_selected_tasks(self) -> None:
+        ids = self._selected_task_ids()
+        if not ids:
+            self._notify("Select one or more tasks first.")
+            return
+        dlg = ShiftScopeDialog(self, self._svc, mode="tasks", task_ids=ids)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.applied_result is not None:
+            self._record_bulk_shift(dlg.applied_result)
+            self._reload_task_list()
+            self._load_task_detail()
+            self._on_calendar_date_changed()
+
+    def _slip_schedule_from_date(self) -> None:
+        dlg = ShiftScopeDialog(self, self._svc, mode="slip")
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.applied_result is not None:
+            self._record_bulk_shift(dlg.applied_result)
+            self._reload_task_list()
+            self._load_task_detail()
+            self._on_calendar_date_changed()
+
+    def _undo_last_bulk_shift(self) -> None:
+        if self._last_bulk_shift is None:
+            self._notify("Nothing to undo.")
+            return
+        from tasktracker.services.shift_service import ShiftService
+
+        ss = ShiftService(self._svc.session)
+        try:
+            ss.undo_shift(self._last_bulk_shift)
+        except Exception as exc:
+            QMessageBox.warning(self, "Undo failed", str(exc))
+            return
+        self._notify(
+            f"Undid bulk shift {self._last_bulk_shift.shift_id} "
+            f"({self._last_bulk_shift.changed_row_count} row(s) reverted)."
+        )
+        self._last_bulk_shift = None
+        self.act_undo_bulk_shift.setEnabled(False)
+        self.act_undo_bulk_shift.setToolTip("No bulk shift to undo.")
+        self._reload_task_list()
+        self._load_task_detail()
+        self._on_calendar_date_changed()
+
+    def record_bulk_shift(self, result: ShiftResult) -> None:
+        """Public alias for ``_record_bulk_shift`` - used by dialogs
+        that want to feed their own shift results into the undo slot
+        (e.g. the calendar quick-edit's selection-shift strip)."""
+        self._record_bulk_shift(result)
+
+    def _record_bulk_shift(self, result: ShiftResult) -> None:
+        self._last_bulk_shift = result
+        self.act_undo_bulk_shift.setEnabled(True)
+        self.act_undo_bulk_shift.setToolTip(result.describe())
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._session.close()

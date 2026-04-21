@@ -87,6 +87,42 @@ def add_business_days(
     return d
 
 
+def shift_business_days(
+    start: dt.date,
+    days: int,
+    holidays: set[dt.date],
+    *,
+    skip_weekends: bool = True,
+    skip_holidays: bool = True,
+) -> dt.date:
+    """Move ``start`` by ``days`` business days in either direction.
+
+    Unlike :func:`add_business_days` (which is tailored for recurrence
+    spawning and collapses ``days <= 0`` to "next business day on or
+    after"), this helper is symmetric: positive deltas step into the
+    future, negative deltas step into the past, and ``0`` returns
+    ``start`` unchanged (no rounding). Intermediate weekend/holiday
+    days are counted against the running tally in both directions so
+    "shift by 5 business days" always skips exactly five work days.
+
+    Kept here alongside :func:`add_business_days` so anything that
+    needs business-day arithmetic (recurrence, bulk shifts, the
+    calendar quick-edit dialog) pulls from one module.
+    """
+    if days == 0:
+        return start
+    step = dt.timedelta(days=1 if days > 0 else -1)
+    remaining = abs(days)
+    d = start
+    while remaining > 0:
+        d += step
+        if _is_business_day(
+            d, holidays, skip_weekends=skip_weekends, skip_holidays=skip_holidays
+        ):
+            remaining -= 1
+    return d
+
+
 def refresh_next_milestone(session: Session, task: Task) -> None:
     """Update denormalized next_milestone_date without reading task.todos.
 
@@ -414,13 +450,13 @@ class TaskService:
         task_id: int,
         *,
         title: str | None = None,
-        description: str | None = None,
+        description: "str | None | object" = _UNSET,
         status: str | None = None,
         impact: int | None = None,
         urgency: int | None = None,
         received_date: dt.date | None = None,
-        due_date: dt.date | None = None,
-        closed_date: dt.date | None = None,
+        due_date: "dt.date | None | object" = _UNSET,
+        closed_date: "dt.date | None | object" = _UNSET,
         area_id: int | None | object = _UNSET,
         person_id: int | None | object = _UNSET,
     ) -> Task | None:
@@ -431,21 +467,21 @@ class TaskService:
         if title is not None and title.strip() != task.title:
             _log_change(self.session, task.id, "title", task.title, title.strip())
             task.title = title.strip()
-        if description is not None and description != task.description:
+        if description is not _UNSET and description != task.description:
             _log_change(self.session, task.id, "description", task.description, description)
-            task.description = description
+            task.description = description  # type: ignore[assignment]
         if status is not None and status != task.status:
             _log_change(self.session, task.id, "status", task.status, status)
             task.status = status
         if received_date is not None and received_date != task.received_date:
             _log_change(self.session, task.id, "received_date", task.received_date, received_date)
             task.received_date = received_date
-        if due_date is not None and due_date != task.due_date:
+        if due_date is not _UNSET and due_date != task.due_date:
             _log_change(self.session, task.id, "due_date", task.due_date, due_date)
-            task.due_date = due_date
-        if closed_date is not None and closed_date != task.closed_date:
+            task.due_date = due_date  # type: ignore[assignment]
+        if closed_date is not _UNSET and closed_date != task.closed_date:
             _log_change(self.session, task.id, "closed_date", task.closed_date, closed_date)
-            task.closed_date = closed_date
+            task.closed_date = closed_date  # type: ignore[assignment]
         if area_id is not _UNSET and area_id != task.area_id:
             _log_change(
                 self.session,
@@ -665,6 +701,26 @@ class TaskService:
         self.session.refresh(todo)
         return todo
 
+    def delete_todo(self, todo_id: int) -> bool:
+        """Remove a todo row from its parent task.
+
+        Returns ``True`` when a row was deleted so UI code can refresh
+        without guessing. The parent task's denormalized
+        ``next_milestone_date`` is recomputed so any newly-exposed
+        milestone shows up in sidebars and calendars immediately.
+        """
+        todo = self.session.get(TodoItem, todo_id)
+        if todo is None:
+            return False
+        task_id = todo.task_id
+        self.session.delete(todo)
+        self.session.flush()
+        task = self.session.get(Task, task_id)
+        if task is not None:
+            refresh_next_milestone(self.session, task)
+        self.session.commit()
+        return True
+
     def complete_todo(self, todo_id: int) -> None:
         todo = self.session.get(TodoItem, todo_id)
         if not todo or todo.completed_at:
@@ -674,6 +730,90 @@ class TaskService:
         if task:
             refresh_next_milestone(self.session, task)
         self.session.commit()
+
+    def get_todo(self, todo_id: int) -> TodoItem | None:
+        """Return the ``TodoItem`` with this id, or ``None`` if missing."""
+        return self.session.get(TodoItem, todo_id)
+
+    def update_todo(
+        self,
+        todo_id: int,
+        *,
+        title: str | None = None,
+        milestone_date: "dt.date | None | object" = _UNSET,
+    ) -> TodoItem | None:
+        """Edit a todo's title and/or milestone date.
+
+        ``title`` is applied only when non-``None`` and non-empty after strip.
+        ``milestone_date`` uses the module-level ``_UNSET`` sentinel to
+        distinguish "leave alone" from "clear to ``None``": callers pass the
+        new date, pass ``None`` to clear, or omit the argument to leave it.
+        The owning task's next-milestone cache is refreshed when either field
+        actually changes.
+        """
+        todo = self.session.get(TodoItem, todo_id)
+        if todo is None:
+            return None
+        changed = False
+        if title is not None:
+            stripped = title.strip()
+            if stripped and stripped != todo.title:
+                todo.title = stripped
+                changed = True
+        if milestone_date is not _UNSET and milestone_date != todo.milestone_date:
+            todo.milestone_date = milestone_date  # type: ignore[assignment]
+            changed = True
+        if changed:
+            task = self.session.get(Task, todo.task_id)
+            if task is not None:
+                refresh_next_milestone(self.session, task)
+            self.session.commit()
+            self.session.refresh(todo)
+        return todo
+
+    def shift_task_milestones(
+        self,
+        task_id: int,
+        delta_days: int,
+        *,
+        business_days: bool = False,
+    ) -> int:
+        """Shift every open todo milestone on ``task_id`` by ``delta_days``.
+
+        Intended for the calendar quick-edit dialog's "also shift todo
+        milestones" checkbox: the dialog applies the task's own due-date
+        change through :meth:`update_task_fields`, then calls this
+        helper to fan the same delta out to the todo rows. Todos with
+        ``milestone_date`` set to ``None`` are skipped. Returns the
+        number of rows updated so the caller can notify the user.
+
+        Uses :func:`shift_business_days` when ``business_days`` is set;
+        otherwise does plain calendar arithmetic.
+        """
+        if delta_days == 0:
+            return 0
+        task = self.session.get(Task, task_id)
+        if task is None:
+            return 0
+        holidays = _holidays_set(self.session) if business_days else set()
+        touched = 0
+        for td in list(task.todos):
+            if td.milestone_date is None:
+                continue
+            if business_days:
+                new = shift_business_days(
+                    td.milestone_date, delta_days, holidays,
+                    skip_weekends=True, skip_holidays=True,
+                )
+            else:
+                new = td.milestone_date + dt.timedelta(days=delta_days)
+            if new != td.milestone_date:
+                td.milestone_date = new
+                touched += 1
+        if touched:
+            refresh_next_milestone(self.session, task)
+            self.session.commit()
+        return touched
 
     def reorder_todo(self, todo_id: int, new_index: int) -> None:
         todo = self.session.get(TodoItem, todo_id)
