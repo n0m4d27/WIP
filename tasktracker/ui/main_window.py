@@ -12,6 +12,7 @@ from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QColor,
+    QFontMetrics,
     QGuiApplication,
     QKeySequence,
     QTextCharFormat,
@@ -95,6 +96,7 @@ from tasktracker.ui.settings_store import (
     get_report_params,
     get_saved_views,
     get_theme_id,
+    get_ui_text_scale,
     load_ui_settings,
     move_saved_view,
     normalize_section_order,
@@ -103,14 +105,17 @@ from tasktracker.ui.settings_store import (
     save_ui_settings,
     set_date_format_qt,
     set_display_timezone,
+    set_ui_text_scale,
     set_last_tab,
     set_report_params,
     set_theme_id,
 )
 from tasktracker.ui.dashboard import DASHBOARD_CARD_META, DashboardWidget
 from tasktracker.ui.saved_views import SavedViewsWidget
+from tasktracker.ui.text_scale import apply_app_text_scale, propagate_font_to_widget_tree
 from tasktracker.ui.themes import apply_theme, calendar_event_colors, list_themes
 from tasktracker.ui.task_panel_layout_dialog import run_task_panel_layout_dialog
+from tasktracker.ui.text_scale_dialog import run_text_scale_dialog
 from tasktracker.ui.todo_dialog import run_add_todo_dialog, run_edit_todo_dialog
 from tasktracker.ui.user_guide_dialog import run_user_guide_dialog
 
@@ -199,6 +204,7 @@ class MainWindow(QMainWindow):
         # Populate the Dashboard tab once so it isn't blank if the user
         # launched straight into it via the last-tab restore.
         self._refresh_dashboard()
+        self._reapply_text_scale()
 
         # Deferred so the status bar exists before the message is shown.
         if startup_notice:
@@ -345,6 +351,8 @@ class MainWindow(QMainWindow):
         save_ui_settings(self._ui_settings)
         app = QApplication.instance()
         theme = apply_theme(app, theme_id) if app is not None else None
+        if app is not None:
+            self._reapply_text_scale()
         # Calendar day shading pulls its colors from the theme's extras
         # dict (see _highlight_calendar_month); Qt's QCalendarWidget
         # doesn't repaint those tiles on palette-only changes, so we
@@ -391,6 +399,93 @@ class MainWindow(QMainWindow):
         save_ui_settings(self._ui_settings)
         self._refresh_timeline()
         self._notify(f"Display timezone set to {get_display_timezone(self._ui_settings)}.")
+
+    def _open_text_scale_settings(self) -> None:
+        current = get_ui_text_scale(self._ui_settings)
+        chosen = run_text_scale_dialog(self, current)
+        if chosen is None or chosen == current:
+            return
+        set_ui_text_scale(self._ui_settings, chosen)
+        save_ui_settings(self._ui_settings)
+        self._reapply_text_scale()
+        pct = int(round(get_ui_text_scale(self._ui_settings) * 100))
+        self._notify(f"Text size set to {pct}%.")
+
+    def _reapply_text_scale(self) -> None:
+        """Apply persisted scale, push font through the window tree, sync metrics."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        apply_app_text_scale(app, get_ui_text_scale(self._ui_settings))
+        propagate_font_to_widget_tree(self, app.font())
+        self._apply_text_scale_surfaces()
+
+    def _apply_text_scale_surfaces(self) -> None:
+        """Resize font-derived chrome after app font or scale changes."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        f = app.font()
+        fm_app = QFontMetrics(f)
+
+        if hasattr(self, "f_priority_label"):
+            if hasattr(self, "f_description"):
+                self.f_description.setFont(f)
+                self.f_description.document().setDefaultFont(f)
+            if hasattr(self, "note_editor"):
+                self.note_editor.setFont(f)
+                self.note_editor.document().setDefaultFont(f)
+
+            fm = self.f_priority_label.fontMetrics()
+            pd_w = max(fm.horizontalAdvance(priority_display(pr)) for pr in range(1, 6))
+            self.f_priority_label.setMinimumWidth(pd_w)
+
+            if hasattr(self, "f_description"):
+                hf = self.f_description.fontMetrics().height()
+                self.f_description.setMinimumHeight(max(int(round(hf * 14)), 180))
+            if hasattr(self, "note_editor"):
+                hn = self.note_editor.fontMetrics().height()
+                self.note_editor.setMinimumHeight(max(int(round(hn * 10)), 120))
+            if hasattr(self, "_sections_tabs"):
+                ht = self._sections_tabs.fontMetrics().height()
+                self._sections_tabs.setMinimumHeight(max(int(round(ht * 20)), 240))
+            if hasattr(self, "rec_template"):
+                hr = self.rec_template.fontMetrics().height()
+                self.rec_template.setMaximumHeight(max(int(round(hr * 6)), 80))
+
+            self._refresh_priority_label()
+
+        self._sync_reports_scale_metrics(fm_app)
+
+        if hasattr(self, "cal_widget"):
+            self.cal_widget.updateGeometry()
+
+    def _sync_reports_scale_metrics(self, fm: QFontMetrics) -> None:
+        """Keep Reports tab control sizes aligned with the active font."""
+        if not hasattr(self, "_report_param_widgets"):
+            return
+        date_min = max(int(fm.horizontalAdvance("2026-12-31") * 1.15) + 32, 96)
+        if hasattr(self, "reports_list") and self.reports_list.count() > 0:
+            list_label_w = max(
+                fm.horizontalAdvance(self.reports_list.item(i).text())
+                for i in range(self.reports_list.count())
+            )
+        else:
+            list_label_w = fm.horizontalAdvance("Weekly status")
+        combo_min = max(list_label_w, fm.horizontalAdvance("By for-person")) + 48
+        combo_min = max(combo_min, 160)
+        for _rid, controls in self._report_param_widgets.items():
+            for w in controls.values():
+                if isinstance(w, QDateEdit):
+                    w.setMinimumWidth(date_min)
+                elif isinstance(w, QComboBox):
+                    w.setMinimumWidth(combo_min)
+        if hasattr(self, "reports_summary"):
+            self.reports_summary.setMaximumHeight(max(int(fm.height() * 8), 100))
+        if hasattr(self, "reports_list"):
+            labels = [label for _rid, label in self.REPORT_LIST]
+            list_w = max(fm.horizontalAdvance(x) for x in labels) + 40
+            self.reports_list.setMaximumWidth(max(list_w, 160))
 
     def _apply_date_format_to_widgets(self) -> None:
         """Update every ``QDateEdit`` under this window's widget tree."""
@@ -569,6 +664,7 @@ class MainWindow(QMainWindow):
         m_settings.addAction("Keyboard shortcuts…", self._open_keyboard_shortcuts)
         m_settings.addAction("Date format…", self._open_date_format_settings)
         m_settings.addAction("Display timezone…", self._open_display_timezone_settings)
+        m_settings.addAction("Text size…", self._open_text_scale_settings)
         m_settings.addSeparator()
         m_settings.addAction("Manage categories and people…", self._open_reference_data_manager)
         m_settings.addAction("Export categories and people…", self._export_reference_data)

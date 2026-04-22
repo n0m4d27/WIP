@@ -13,8 +13,9 @@
   },
   "date_format": "yyyy-MM-dd",
   "display_timezone": "local",
+  "ui_text_scale": 1.0,
   "theme": "dark",
-  "last_tab": "tasks",
+  "last_tab": "dashboard",
   "saved_views": [],
   "reports": {
     "last_params": {}

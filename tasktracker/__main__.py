@@ -25,8 +25,9 @@ from tasktracker.ui.auth_dialogs import (
     run_setup_password_dialog,
 )
 from tasktracker.ui.main_window import MainWindow
-from tasktracker.ui.settings_store import get_theme_id, load_ui_settings
+from tasktracker.ui.settings_store import get_theme_id, get_ui_text_scale, load_ui_settings
 from tasktracker.ui.themes import apply_theme
+from tasktracker.ui.text_scale import apply_app_text_scale, ensure_text_scale_baseline
 from tasktracker.ui.vault_dialogs import run_vault_picker_dialog
 
 
@@ -121,7 +122,10 @@ def main() -> None:
     # because the settings file lives under ``<vault>/app_data/``;
     # each vault can carry its own theme preference.
     try:
-        apply_theme(app, get_theme_id(load_ui_settings()))
+        _ui_boot = load_ui_settings()
+        apply_theme(app, get_theme_id(_ui_boot))
+        ensure_text_scale_baseline(app)
+        apply_app_text_scale(app, get_ui_text_scale(_ui_boot))
     except Exception:
         # Never block startup on a theming failure - a missing or
         # malformed settings file will fall back to the system theme.

@@ -93,6 +93,11 @@ _MAX_DISPLAY_TIMEZONE_LEN = 120
 # Sentinel: use the machine's current timezone for activity / note timestamps.
 DEFAULT_DISPLAY_TIMEZONE: str = "local"
 
+# Application text scale (multiplier on the baseline Qt font). Clamped for sanity.
+DEFAULT_UI_TEXT_SCALE: float = 1.0
+MIN_UI_TEXT_SCALE: float = 0.85
+MAX_UI_TEXT_SCALE: float = 1.75
+
 # Known report ids surfaced in the Reports tab. Kept here so the UI and the
 # settings store agree on which keys are valid; unknown keys read from disk
 # are simply ignored on load (no hard failure if older settings exist).
@@ -115,6 +120,8 @@ def default_ui_settings() -> dict[str, Any]:
         # :func:`get_display_timezone`). Used when rendering activity
         # timestamps and similar; exports stay UTC / ISO.
         "display_timezone": DEFAULT_DISPLAY_TIMEZONE,
+        # Interface text size multiplier (see :mod:`tasktracker.ui.text_scale`).
+        "ui_text_scale": DEFAULT_UI_TEXT_SCALE,
         # Color theme id (see :mod:`tasktracker.ui.themes`). "system" keeps
         # the current platform defaults and is the safest starting point.
         "theme": DEFAULT_THEME_ID,
@@ -142,6 +149,17 @@ def _coerce_theme_id(raw: Any) -> str:
     if isinstance(raw, str) and raw in THEMES_BY_ID:
         return raw
     return DEFAULT_THEME_ID
+
+
+def coerce_ui_text_scale(raw: Any) -> float:
+    """Return a clamped text-scale multiplier (default 1.0)."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_UI_TEXT_SCALE
+    if v != v:  # NaN
+        return DEFAULT_UI_TEXT_SCALE
+    return max(MIN_UI_TEXT_SCALE, min(MAX_UI_TEXT_SCALE, v))
 
 
 def _coerce_display_timezone(raw: Any) -> str:
@@ -275,6 +293,8 @@ def load_ui_settings() -> dict[str, Any]:
         base["date_format"] = _coerce_date_format(raw["date_format"])
     if "display_timezone" in raw:
         base["display_timezone"] = _coerce_display_timezone(raw["display_timezone"])
+    if "ui_text_scale" in raw:
+        base["ui_text_scale"] = coerce_ui_text_scale(raw["ui_text_scale"])
     if "theme" in raw:
         base["theme"] = _coerce_theme_id(raw["theme"])
     if "last_tab" in raw:
@@ -292,6 +312,16 @@ def load_ui_settings() -> dict[str, Any]:
                     }
             base["reports"]["last_params"] = cleaned
     return base
+
+
+def get_ui_text_scale(settings: dict[str, Any]) -> float:
+    """Return the persisted interface text scale multiplier."""
+    return coerce_ui_text_scale(settings.get("ui_text_scale"))
+
+
+def set_ui_text_scale(settings: dict[str, Any], scale: float) -> None:
+    """Persist a clamped text scale for the next ``save_ui_settings``."""
+    settings["ui_text_scale"] = coerce_ui_text_scale(scale)
 
 
 def get_display_timezone(settings: dict[str, Any]) -> str:
