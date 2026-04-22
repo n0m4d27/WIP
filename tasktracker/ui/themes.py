@@ -210,6 +210,16 @@ _LIGHT = Theme(
         "HighlightedText": "#5a5a5a",
     },
     stylesheet=_LIGHT_STYLESHEET,
+    extras={
+        # Calendar-day shading for tiles that carry a due date,
+        # milestone, received date, or close date. A pale blue
+        # background reads as "something lives here" without
+        # overpowering the day number; an explicit dark-navy
+        # foreground keeps the digit readable no matter how the
+        # platform chooses to paint the default calendar text.
+        "calendar_event_bg": "#bbdefb",
+        "calendar_event_fg": "#0b3a6e",
+    },
 )
 
 _DARK = Theme(
@@ -248,6 +258,16 @@ _DARK = Theme(
         "HighlightedText": "#9a9a9a",
     },
     stylesheet=_DARK_STYLESHEET,
+    extras={
+        # Dark theme needs a bright-but-saturated badge color for
+        # flagged calendar days - the previous pale-blue background
+        # blended with Fusion's light-gray day digits and rendered
+        # the date itself almost illegible. A deep steel blue with
+        # pure white digits makes the flagged cell unmistakable
+        # without clashing against the dark window chrome.
+        "calendar_event_bg": "#2e5f8a",
+        "calendar_event_fg": "#ffffff",
+    },
 )
 
 _LIGHT_GRAY = Theme(
@@ -284,6 +304,14 @@ _LIGHT_GRAY = Theme(
         "HighlightedText": "#5a5a5a",
     },
     stylesheet=_LIGHT_GRAY_STYLESHEET,
+    extras={
+        # Same pale-blue badge as the Light theme; both light
+        # palettes paint calendar digits in near-black, so the
+        # dark-navy foreground stays readable on the tinted
+        # background.
+        "calendar_event_bg": "#bbdefb",
+        "calendar_event_fg": "#0b3a6e",
+    },
 )
 
 _SEPIA = Theme(
@@ -320,6 +348,14 @@ _SEPIA = Theme(
         "HighlightedText": "#5a4a30",
     },
     stylesheet=_SEPIA_STYLESHEET,
+    extras={
+        # Warm amber badge to keep the calendar highlight within the
+        # sepia palette rather than popping a cool-blue outlier on
+        # the warm page background. Dark sepia ink preserves the
+        # day-number legibility.
+        "calendar_event_bg": "#c9a469",
+        "calendar_event_fg": "#2a1f12",
+    },
 )
 
 
@@ -415,3 +451,26 @@ def apply_theme(app, theme_id: str | None) -> Theme:
 def list_themes() -> tuple[Theme, ...]:
     """Return the themes in menu / display order."""
     return THEMES
+
+
+# Fallback used when a theme doesn't register calendar colors (e.g. a
+# future experimental theme added before its extras are filled in).
+# The pale-blue-on-navy pair is the original Light-theme pick and is
+# safe on most light backgrounds; dark themes that forget to set
+# extras will look off but won't render illegible text.
+_DEFAULT_CALENDAR_EVENT_BG: str = "#bbdefb"
+_DEFAULT_CALENDAR_EVENT_FG: str = "#0b3a6e"
+
+
+def calendar_event_colors(theme_id: str | None) -> tuple[str, str]:
+    """Return ``(background, foreground)`` hex strings for flagged
+    calendar day cells under ``theme_id``.
+
+    Lookups fall back to the default theme when ``theme_id`` is
+    unknown, so callers (the main window's calendar highlighter) can
+    pass the raw persisted id without pre-validating it.
+    """
+    theme = get_theme(theme_id)
+    bg = theme.extras.get("calendar_event_bg", _DEFAULT_CALENDAR_EVENT_BG)
+    fg = theme.extras.get("calendar_event_fg", _DEFAULT_CALENDAR_EVENT_FG)
+    return bg, fg

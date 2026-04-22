@@ -31,6 +31,18 @@ from tasktracker.domain.enums import RecurrenceGenerationMode, TaskStatus
 from tasktracker.domain.priority import compute_priority, priority_display
 
 
+# Stable ordering for Dashboard cards. UI and tests import this tuple
+# instead of spelling the ids out in multiple places; adding a new card
+# is a one-line change here plus its service branch.
+DASHBOARD_CARD_IDS: tuple[str, ...] = (
+    "overdue",
+    "due_today",
+    "due_this_week",
+    "blocked",
+    "top_priority",
+)
+
+
 def _holidays_set(session: Session) -> set[dt.date]:
     rows = session.scalars(select(BusinessHoliday.holiday_date)).all()
     return set(rows)
@@ -1124,6 +1136,80 @@ class TaskService:
         tasks = self.list_tasks(include_closed=True)
         closed = [t for t in tasks if t.closed_date and t.closed_date >= since]
         return {"since": since.isoformat(), "days_window": days, "closed_count": len(closed)}
+
+    # ------------------------------------------------------------------
+    # Dashboard aggregation
+    # ------------------------------------------------------------------
+    # The Dashboard tab (plan 01) renders a small fixed set of
+    # "what needs attention right now" cards. Each card has a row count
+    # and a compact list of the top N tasks that drive it. Rather than
+    # spread five near-identical queries across the UI layer, we build
+    # them once here against a single prefetched pool of non-terminal
+    # tasks so card math stays internally consistent (overdue + due
+    # today never disagree by an off-by-one bucket boundary).
+
+    # Statuses that keep a task off dashboard cards entirely. Closed and
+    # cancelled are terminal states and out of scope for active triage.
+    _DASHBOARD_EXCLUDED_STATUSES: frozenset[str] = frozenset(
+        {TaskStatus.CLOSED, TaskStatus.CANCELLED}
+    )
+
+    def dashboard_sections(
+        self,
+        *,
+        as_of: dt.date | None = None,
+        top_n: int = 8,
+    ) -> dict[str, dict[str, Any]]:
+        """Return card payloads keyed by card id.
+
+        Each value is a dict with ``count`` (total matching tasks) and
+        ``rows`` (up to ``top_n`` Task rows, ordered for display).
+
+        Card ids are stable and consumed both by the UI layer and by
+        tests; see :data:`DASHBOARD_CARD_IDS` for the authoritative
+        tuple and the declared ordering.
+
+        The function is deliberately tolerant of today's input: it
+        prefetches the active task pool once and reuses it across
+        cards so the numbers cannot drift mid-render, and it treats
+        "top priority" as P1 + P2 only (anything lower is already on
+        the list and does not need a dedicated signal).
+        """
+        today = as_of or dt.date.today()
+        week_end = today + dt.timedelta(days=6)
+        pool = [
+            t
+            for t in self.list_tasks(include_closed=False)
+            if t.status not in self._DASHBOARD_EXCLUDED_STATUSES
+        ]
+
+        def _sort_key(t: Task) -> tuple[int, dt.date, int, str]:
+            # Tasks with a due date first (ascending), then priority
+            # ascending (1 = Critical), then title for a stable tail.
+            no_due = 1 if t.due_date is None else 0
+            return (no_due, t.due_date or dt.date.max, t.priority, t.title)
+
+        def _bucket(pred) -> list[Task]:
+            return sorted([t for t in pool if pred(t)], key=_sort_key)
+
+        overdue = _bucket(lambda t: t.due_date is not None and t.due_date < today)
+        due_today = _bucket(lambda t: t.due_date == today)
+        due_this_week = _bucket(
+            lambda t: t.due_date is not None and today <= t.due_date <= week_end
+        )
+        blocked = _bucket(lambda t: t.status == TaskStatus.BLOCKED)
+        top_priority = _bucket(lambda t: t.priority <= 2)
+
+        def _payload(rows: list[Task]) -> dict[str, Any]:
+            return {"count": len(rows), "rows": rows[:top_n]}
+
+        return {
+            "overdue": _payload(overdue),
+            "due_today": _payload(due_today),
+            "due_this_week": _payload(due_this_week),
+            "blocked": _payload(blocked),
+            "top_priority": _payload(top_priority),
+        }
 
     def list_holidays(self) -> list[BusinessHoliday]:
         return list(

@@ -13,6 +13,39 @@ ul { padding-left: 1.2em; }
 
 <p>This guide ships with the app and is read-only. Use <b>Help → User guide</b>, tab <b>My notes</b>, for your own conventions (what goes in each field).</p>
 
+<h2>Dashboard</h2>
+<ul>
+<li><b>What it is</b> — the leftmost tab and default landing surface when the app opens. It answers "what needs my attention right now" at a glance, without having to scroll the task list.</li>
+<li><b>Cards</b> — <b>Overdue</b> (due date before today, status not closed/cancelled), <b>Due today</b>, <b>Due this week</b> (today through six days out, inclusive), <b>Blocked</b> (status = blocked), and <b>Top priority (P1/P2)</b>. Each card shows a live count, a compact list of up to eight top-priority rows, and a <b>Show all</b> button.</li>
+<li><b>Opening a task</b> — double-click a row (or press <b>Enter</b> on a selected row) to jump to it on the <b>Tasks</b> tab, same as double-clicking in the task list. The dashboard itself stays read-only on purpose; edits happen in one place so two views of the same task can't fight.</li>
+<li><b>Show all</b> — pins the Tasks tab's task list to exactly the rows the card is counting, and drops you on the Tasks tab. Clear the search box (or type any new search) to release the filter when you're done. This is the fastest way to work an entire card's worth of tasks without having to scan the full list.</li>
+<li><b>"… and N more"</b> — if a card has more hits than it can show (more than eight), the last row is a greyed-out hint telling you how many extra matches exist. Click <b>Show all</b> to see them on the Tasks tab.</li>
+<li><b>Refresh</b> is automatic on tab entry — navigating back to the Dashboard re-queries the database so counts can't go stale while you work elsewhere. There is no manual refresh button on purpose; just re-enter the tab.</li>
+<li><b>Sort order within a card</b> — rows are sorted by due date ascending (undated tasks last), then by priority (Critical before High, etc.), then by title. The "Top priority" card therefore shows the most-urgent due-soon P1/P2 first.</li>
+<li><b>Startup tab memory</b> — the app remembers which tab you were on last and reopens there. To "reset" back to the Dashboard, switch to it and close the app; on next launch it will land there.</li>
+<li><b>Suggested morning routine</b> — open the app (it reopens on the tab you left last), glance at <b>Overdue</b> and <b>Due today</b>, and drill into either via <b>Show all</b> if the list is more than a handful. Then scan <b>Blocked</b> to send any nudges you owe, and finally walk <b>Top priority</b> to confirm P1/P2 work is staffed.</li>
+</ul>
+
+<h2>Saved views</h2>
+<ul>
+<li><b>What it is</b> — the <b>Saved views</b> panel on the Tasks tab (left column, above the task list). Each saved view is a named snapshot of the current filter state: search text, which search-field checkboxes are on (<b>Title</b>, <b>Description</b>, <b>Notes</b>, <b>Todos</b>, <b>Blockers</b>, <b>Audit</b>, <b>Ticket</b>), and the <b>Hide closed tasks</b> toggle.</li>
+<li><b>Save a view</b> — set the filters exactly the way you want on the Tasks tab (type a search, toggle checkboxes, toggle <b>Hide closed</b>), then click <b>Save current…</b> in the Saved views box. Enter a name and press Enter. The name appears immediately in the list.</li>
+<li><b>Apply a view</b> — double-click a row in the list, or select it and click <b>Apply</b>. The Tasks tab's search box, field checkboxes, and hide-closed toggle snap to that view's settings and the task list reloads once. The dashboard's "Show all" buttons use the same apply path, so keyboard navigation is consistent.</li>
+<li><b>Replacing a view's filters</b> — pick <b>Save current…</b> and type an existing view name (case-insensitive). You'll be asked to confirm the replace; the view keeps its position in the list and its original casing, only the captured filters change. This is the recommended way to "update" a view after tweaking its filters.</li>
+<li><b>Rename / Delete / Reorder</b> — select a view and use <b>Rename…</b>, <b>Delete</b>, or <b>Move up / Move down</b>. Rename refuses to collide with another view's name; the move buttons grey out on the top/bottom row so you know you've reached the edge.</li>
+<li><b>Examples worth saving</b> —
+  <ul>
+  <li>"My WFM open": search "<code>wfm</code>" in Title + Description, Hide closed = on.</li>
+  <li>"Headcount P1/P2": search "<code>headcount</code>" in Title + Description + Notes, Hide closed = on; then eyeball the list (priority is already part of the row label).</li>
+  <li>"Waiting on HR": search "<code>hr</code>" in Blockers + Audit, Hide closed = on — this catches both current blockers and historical HR-waits from the audit trail.</li>
+  <li>"Recent closed touch-ups": search "<code>hr</code>" in Audit, Hide closed = off — shows closed tasks whose audit log mentioned HR, handy after a busy week.</li>
+  </ul>
+</li>
+<li><b>Where they live</b> — views are persisted per-vault in <code>app_data/ui_settings.json</code>, so each vault has its own set. Creating a new vault or switching vaults lands you with an empty list; a broken / hand-edited settings file falls back gracefully (bad entries are dropped, good ones kept).</li>
+<li><b>Forward compatibility</b> — every saved view carries a schema version. A future release can add new filter dimensions (tags, categories, for-person, date windows) without invalidating views you save today.</li>
+<li><b>Last-applied view is not auto-restored</b> on startup — by design, so yesterday's filters can't quietly hide today's new work. Apply the view you want whenever you need it.</li>
+</ul>
+
 <h2>Tasks</h2>
 <ul>
 <li><b>New Task</b> (title, received, due), <b>Save Task</b> (persist the detail form), <b>Close Task</b> (close + on-close recurrence if configured) — toolbar, <b>Task actions</b> row at the top of the detail pane, and shortcuts (defaults Ctrl+N, Ctrl+S, Ctrl+Shift+C; change under Settings).</li>
@@ -56,6 +89,7 @@ ul { padding-left: 1.2em; }
 <li>Toggles for due, milestones, received, closed; option to include closed tasks.</li>
 <li><b>Set current task due date to selected day</b> applies the calendar selection to the task selected on the Tasks tab.</li>
 <li>Legend colors; list sorted by priority within a day.</li>
+<li><b>Day cell highlighting</b> — any day that carries at least one visible event (given your current toggles) is shaded. The shading color <i>and</i> the color of the day number itself come from the active theme, so the day number stays readable against the tint regardless of whether you're on Light, Dark, Light gray, or Sepia. Switch themes from <b>View → Theme</b>; the calendar reshades immediately without needing a restart.</li>
 </ul>
 <h3>Editing a task from the Calendar tab</h3>
 <ul>

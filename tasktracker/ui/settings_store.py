@@ -11,6 +11,29 @@ from tasktracker.ui.themes import DEFAULT_THEME_ID, THEMES_BY_ID
 
 SETTINGS_FILENAME = "ui_settings.json"
 
+# Tab ids known to the main window. Stored (as a string) under
+# ``last_tab`` so startup can restore the last-used tab. Unknown values
+# coerce to the default (Dashboard) rather than erroring.
+KNOWN_TAB_IDS: tuple[str, ...] = (
+    "dashboard",
+    "tasks",
+    "calendar",
+    "reports",
+    "holidays",
+)
+DEFAULT_TAB_ID: str = "dashboard"
+
+# Schema version for persisted saved views. Kept separate from the
+# settings file version so a future addition (e.g. tag filters from
+# plan 06) can be introduced with a forward-compatible bump without
+# disturbing other settings sections.
+SAVED_VIEW_SCHEMA_VERSION: int = 1
+
+# Upper bound on a saved-view name so the settings file can't be
+# inflated by a corrupt write. Matches the 200-char limit used by
+# reference data naming elsewhere.
+_MAX_SAVED_VIEW_NAME_LEN: int = 200
+
 # Ordered section ids for the movable blocks below core task fields on the Tasks tab.
 TASK_SECTION_IDS: tuple[str, ...] = ("todos", "notes", "blockers", "recurring", "activity")
 
@@ -85,6 +108,13 @@ def default_ui_settings() -> dict[str, Any]:
         # Color theme id (see :mod:`tasktracker.ui.themes`). "system" keeps
         # the current platform defaults and is the safest starting point.
         "theme": DEFAULT_THEME_ID,
+        # Last-used tab id so startup can restore what the user was on,
+        # defaulting to the dashboard the first time.
+        "last_tab": DEFAULT_TAB_ID,
+        # Named filter snapshots ("saved views") for the Tasks tab. Stored
+        # as an ordered list so user-driven reordering survives a save.
+        # Shape per entry: {"name": str, "filters": dict, "version": int}.
+        "saved_views": [],
         # Per-report last-used parameters (e.g. date ranges, period, group_by).
         # Stored as a JSON-friendly mapping so the Reports tab can repopulate
         # its widgets without re-deriving defaults each session. Schema is
@@ -116,6 +146,67 @@ def _coerce_date_format(raw: Any) -> str:
     if not trimmed or len(trimmed) > _MAX_DATE_FORMAT_LEN:
         return DEFAULT_DATE_FORMAT
     return trimmed
+
+
+def _coerce_last_tab(raw: Any) -> str:
+    """Return a known tab id or fall back to the default (Dashboard)."""
+    if isinstance(raw, str) and raw in KNOWN_TAB_IDS:
+        return raw
+    return DEFAULT_TAB_ID
+
+
+def _coerce_saved_view(raw: Any) -> dict[str, Any] | None:
+    """Return a normalized saved-view dict, or ``None`` if unusable.
+
+    A view is usable when it has a non-empty name and a JSON-object
+    filters payload. Missing ``version`` is treated as the current
+    schema version (we are still on v1 so the field is informational
+    for now; future schema bumps can use it to migrate).
+    """
+    if not isinstance(raw, dict):
+        return None
+    name = raw.get("name")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if not name or len(name) > _MAX_SAVED_VIEW_NAME_LEN:
+        return None
+    filters = raw.get("filters")
+    if not isinstance(filters, dict):
+        return None
+    # Drop keys with non-string names so we know every key is safe to
+    # feed back into widget lookups. Values are left untouched: each
+    # consumer validates the shape it cares about.
+    filters_clean: dict[str, Any] = {
+        str(k): v for k, v in filters.items() if isinstance(k, str)
+    }
+    version = raw.get("version")
+    if not isinstance(version, int):
+        version = SAVED_VIEW_SCHEMA_VERSION
+    return {"name": name, "filters": filters_clean, "version": version}
+
+
+def _coerce_saved_views(raw: Any) -> list[dict[str, Any]]:
+    """Return a cleaned list of saved views, preserving order.
+
+    Bad entries are dropped silently. Duplicate names (case-insensitive)
+    keep only the first occurrence so the sidebar never shows two rows
+    that look identical but act differently.
+    """
+    if not isinstance(raw, list):
+        return []
+    seen_names: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for entry in raw:
+        view = _coerce_saved_view(entry)
+        if view is None:
+            continue
+        key = view["name"].casefold()
+        if key in seen_names:
+            continue
+        seen_names.add(key)
+        out.append(view)
+    return out
 
 
 def normalize_section_order(order: list[Any]) -> list[str]:
@@ -156,6 +247,10 @@ def load_ui_settings() -> dict[str, Any]:
         base["date_format"] = _coerce_date_format(raw["date_format"])
     if "theme" in raw:
         base["theme"] = _coerce_theme_id(raw["theme"])
+    if "last_tab" in raw:
+        base["last_tab"] = _coerce_last_tab(raw["last_tab"])
+    if "saved_views" in raw:
+        base["saved_views"] = _coerce_saved_views(raw["saved_views"])
     if isinstance(raw.get("reports"), dict):
         last = raw["reports"].get("last_params")
         if isinstance(last, dict):
@@ -211,6 +306,167 @@ def set_report_params(
     reports = settings.setdefault("reports", {"last_params": {}})
     last = reports.setdefault("last_params", {})
     last[report_id] = dict(params)
+
+
+def get_last_tab(settings: dict[str, Any]) -> str:
+    """Return the last-selected tab id, falling back to the default."""
+    return _coerce_last_tab(settings.get("last_tab"))
+
+
+def set_last_tab(settings: dict[str, Any], tab_id: str) -> None:
+    """Persist ``tab_id`` as the tab to reopen on next launch."""
+    settings["last_tab"] = _coerce_last_tab(tab_id)
+
+
+def get_saved_views(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return a shallow copy of the saved-view list.
+
+    Callers mutate the returned list freely; persistence happens via
+    :func:`set_saved_views`, :func:`add_saved_view`, etc. Each returned
+    entry is itself a shallow copy so edits to ``filters`` on a copy
+    cannot silently alter the settings dict in memory.
+    """
+    raw = settings.get("saved_views")
+    coerced = _coerce_saved_views(raw) if raw is not None else []
+    return [
+        {"name": v["name"], "filters": dict(v["filters"]), "version": v["version"]}
+        for v in coerced
+    ]
+
+
+def set_saved_views(
+    settings: dict[str, Any], views: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Replace the saved-view list wholesale after coercion.
+
+    Returns the cleaned list that was actually stored so the UI can
+    stay in sync (e.g. if two views collided on name).
+    """
+    cleaned = _coerce_saved_views(views)
+    settings["saved_views"] = cleaned
+    return cleaned
+
+
+def _find_saved_view_index(
+    views: list[dict[str, Any]], name: str
+) -> int:
+    key = name.strip().casefold()
+    for i, v in enumerate(views):
+        if v["name"].casefold() == key:
+            return i
+    return -1
+
+
+def add_saved_view(
+    settings: dict[str, Any],
+    name: str,
+    filters: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Append a new saved view with the given name and filters.
+
+    If ``name`` collides with an existing view (case-insensitive) the
+    existing entry's filters are replaced so "Save as view…" acts as
+    an in-place update when the user picks a used name - matching the
+    affordance users expect from similar tools. Returns the stored
+    view, or ``None`` if the name was empty / otherwise invalid.
+    """
+    coerced = _coerce_saved_view(
+        {
+            "name": name,
+            "filters": filters,
+            "version": SAVED_VIEW_SCHEMA_VERSION,
+        }
+    )
+    if coerced is None:
+        return None
+    views = _coerce_saved_views(settings.get("saved_views"))
+    idx = _find_saved_view_index(views, coerced["name"])
+    if idx >= 0:
+        # Preserve position and the existing display casing on
+        # overwrite so an accidental "inbox" entry doesn't visually
+        # rename a carefully-cased "Inbox" saved view. Callers who
+        # want to change the casing use ``rename_saved_view``.
+        views[idx] = {
+            "name": views[idx]["name"],
+            "filters": coerced["filters"],
+            "version": coerced["version"],
+        }
+        stored = views[idx]
+    else:
+        views.append(coerced)
+        stored = coerced
+    settings["saved_views"] = views
+    return stored
+
+
+def remove_saved_view(settings: dict[str, Any], name: str) -> bool:
+    """Remove a saved view by name. Returns ``True`` if a view was removed."""
+    views = _coerce_saved_views(settings.get("saved_views"))
+    idx = _find_saved_view_index(views, name)
+    if idx < 0:
+        return False
+    del views[idx]
+    settings["saved_views"] = views
+    return True
+
+
+def rename_saved_view(
+    settings: dict[str, Any], old_name: str, new_name: str
+) -> bool:
+    """Rename a saved view. Returns ``True`` on success.
+
+    Fails (returns ``False``) when the target name is empty, invalid,
+    or already taken by a different view. A rename to the same name is
+    treated as a success no-op.
+    """
+    new_coerced = _coerce_saved_view(
+        {
+            "name": new_name,
+            "filters": {},
+            "version": SAVED_VIEW_SCHEMA_VERSION,
+        }
+    )
+    if new_coerced is None:
+        return False
+    views = _coerce_saved_views(settings.get("saved_views"))
+    idx = _find_saved_view_index(views, old_name)
+    if idx < 0:
+        return False
+    # Same-name rename (differs only in casing) still updates the
+    # stored casing so the user-visible label reflects the new choice.
+    target_key = new_coerced["name"].casefold()
+    for i, v in enumerate(views):
+        if i != idx and v["name"].casefold() == target_key:
+            return False
+    views[idx] = {
+        "name": new_coerced["name"],
+        "filters": views[idx]["filters"],
+        "version": views[idx]["version"],
+    }
+    settings["saved_views"] = views
+    return True
+
+
+def move_saved_view(settings: dict[str, Any], name: str, delta: int) -> bool:
+    """Shift a saved view up (``delta < 0``) or down (``delta > 0``).
+
+    Returns ``True`` when the position actually changed. Edges are
+    clamped - moving the first item up or the last item down is a no-op
+    that reports ``False`` so the UI can disable its buttons.
+    """
+    if delta == 0:
+        return False
+    views = _coerce_saved_views(settings.get("saved_views"))
+    idx = _find_saved_view_index(views, name)
+    if idx < 0:
+        return False
+    target = max(0, min(len(views) - 1, idx + delta))
+    if target == idx:
+        return False
+    item = views.pop(idx)
+    views.insert(target, item)
+    settings["saved_views"] = views
+    return True
 
 
 def save_ui_settings(data: dict[str, Any]) -> None:

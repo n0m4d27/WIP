@@ -81,20 +81,30 @@ from tasktracker.ui.shift_scope_dialog import ShiftScopeDialog
 from tasktracker.ui.priority_matrix_dialog import PriorityMatrixDialog
 from tasktracker.ui.reference_data_dialog import run_manage_reference_data_dialog
 from tasktracker.ui.settings_store import (
+    KNOWN_TAB_IDS,
     TASK_SECTION_LABELS,
     TASK_SECTION_PLACEMENT,
     TASK_SECTION_TAB_LABELS,
+    add_saved_view,
     get_date_format_qt,
+    get_last_tab,
     get_report_params,
+    get_saved_views,
     get_theme_id,
     load_ui_settings,
+    move_saved_view,
     normalize_section_order,
+    remove_saved_view,
+    rename_saved_view,
     save_ui_settings,
     set_date_format_qt,
+    set_last_tab,
     set_report_params,
     set_theme_id,
 )
-from tasktracker.ui.themes import apply_theme, list_themes
+from tasktracker.ui.dashboard import DASHBOARD_CARD_META, DashboardWidget
+from tasktracker.ui.saved_views import SavedViewsWidget
+from tasktracker.ui.themes import apply_theme, calendar_event_colors, list_themes
 from tasktracker.ui.task_panel_layout_dialog import run_task_panel_layout_dialog
 from tasktracker.ui.todo_dialog import run_add_todo_dialog, run_edit_todo_dialog
 from tasktracker.ui.user_guide_dialog import run_user_guide_dialog
@@ -181,6 +191,9 @@ class MainWindow(QMainWindow):
         self._build_menu_toolbar()
         self._apply_task_action_shortcuts()
         self._reload_task_list()
+        # Populate the Dashboard tab once so it isn't blank if the user
+        # launched straight into it via the last-tab restore.
+        self._refresh_dashboard()
 
         # Deferred so the status bar exists before the message is shown.
         if startup_notice:
@@ -327,6 +340,19 @@ class MainWindow(QMainWindow):
         save_ui_settings(self._ui_settings)
         app = QApplication.instance()
         theme = apply_theme(app, theme_id) if app is not None else None
+        # Calendar day shading pulls its colors from the theme's extras
+        # dict (see _highlight_calendar_month); Qt's QCalendarWidget
+        # doesn't repaint those tiles on palette-only changes, so we
+        # reapply the date formats explicitly here. Guarded because
+        # this method runs during construction before the calendar
+        # tab is built.
+        if hasattr(self, "cal_widget"):
+            try:
+                self._highlight_calendar_month()
+            except Exception:
+                # Theme change must never block on a calendar render
+                # hiccup; the next tab-entry repaint will self-heal.
+                pass
         label = theme.label if theme is not None else theme_id
         self._notify(f"Theme set to {label}.")
 
@@ -545,13 +571,39 @@ class MainWindow(QMainWindow):
         # Tracked so the Calendar tab's "Open in Tasks tab for full edit"
         # action can switch back without reaching through ``centralWidget``.
         self._tabs = tabs
-        self._tab_index_tasks = 0
-        self._tab_index_calendar = 1
 
-        tabs.addTab(self._build_tasks_tab(), "Tasks")
-        tabs.addTab(self._build_calendar_tab(), "Calendar")
-        tabs.addTab(self._build_reports_tab(), "Reports")
-        tabs.addTab(self._build_holidays_tab(), "Holidays")
+        # Tab ids are stored (and read) as strings to survive
+        # insertions/reorders. The index-based attributes kept below
+        # remain for legacy call sites until they migrate.
+        self._tab_id_to_index: dict[str, int] = {}
+        self._tab_index_to_id: dict[int, str] = {}
+
+        def add_tab(tab_id: str, widget: QWidget, label: str) -> None:
+            idx = tabs.addTab(widget, label)
+            self._tab_id_to_index[tab_id] = idx
+            self._tab_index_to_id[idx] = tab_id
+
+        add_tab("dashboard", self._build_dashboard_tab(), "Dashboard")
+        add_tab("tasks", self._build_tasks_tab(), "Tasks")
+        add_tab("calendar", self._build_calendar_tab(), "Calendar")
+        add_tab("reports", self._build_reports_tab(), "Reports")
+        add_tab("holidays", self._build_holidays_tab(), "Holidays")
+
+        self._tab_index_tasks = self._tab_id_to_index["tasks"]
+        self._tab_index_calendar = self._tab_id_to_index["calendar"]
+        self._tab_index_dashboard = self._tab_id_to_index["dashboard"]
+
+        # Restore last-used tab if known, else default to the Dashboard.
+        last_tab = get_last_tab(self._ui_settings)
+        if last_tab in self._tab_id_to_index:
+            tabs.setCurrentIndex(self._tab_id_to_index[last_tab])
+        tabs.currentChanged.connect(self._on_tab_changed)
+
+    def _build_dashboard_tab(self) -> QWidget:
+        self.dashboard = DashboardWidget()
+        self.dashboard.show_all_clicked.connect(self._apply_dashboard_filter)
+        self.dashboard.task_activated.connect(self._jump_to_task_in_tasks_tab)
+        return self.dashboard
 
     def _build_tasks_tab(self) -> QWidget:
         w = QWidget()
@@ -599,6 +651,16 @@ class MainWindow(QMainWindow):
         self.chk_hide_closed.setChecked(True)
         self.chk_hide_closed.toggled.connect(self._reload_task_list)
         ll.addWidget(self.chk_hide_closed)
+
+        self.saved_views = SavedViewsWidget()
+        self.saved_views.view_applied.connect(self._apply_saved_view)
+        self.saved_views.save_requested.connect(self._save_current_filters_as_view)
+        self.saved_views.rename_requested.connect(self._rename_saved_view)
+        self.saved_views.delete_requested.connect(self._delete_saved_view)
+        self.saved_views.move_requested.connect(self._move_saved_view)
+        ll.addWidget(self.saved_views)
+        self._refresh_saved_views_sidebar()
+
         self.task_list = QListWidget()
         self.task_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
@@ -1379,6 +1441,259 @@ class MainWindow(QMainWindow):
         self.search_edit.clear()
         self._reload_task_list()
 
+    # ------------------------------------------------------------------
+    # Dashboard + saved views (plan 01)
+    # ------------------------------------------------------------------
+    # Mapping from dashboard card id to the Tasks-tab filter payload
+    # that recreates the card's query when the user clicks "Show all".
+    # Keys match the checkbox attribute names on MainWindow.
+    _DASHBOARD_FILTERS: dict[str, dict[str, object]] = {
+        "overdue": {
+            "search_text": "",
+            "search_fields": ["title"],
+            "hide_closed": True,
+            "_bucket": "overdue",
+        },
+        "due_today": {
+            "search_text": "",
+            "search_fields": ["title"],
+            "hide_closed": True,
+            "_bucket": "due_today",
+        },
+        "due_this_week": {
+            "search_text": "",
+            "search_fields": ["title"],
+            "hide_closed": True,
+            "_bucket": "due_this_week",
+        },
+        "blocked": {
+            "search_text": "",
+            "search_fields": ["title"],
+            "hide_closed": True,
+            "_bucket": "blocked",
+        },
+        "top_priority": {
+            "search_text": "",
+            "search_fields": ["title"],
+            "hide_closed": True,
+            "_bucket": "top_priority",
+        },
+    }
+
+    # Mapping from dashboard card id to the Tasks-tab status notice
+    # shown when the user applies the card's filter. Lets the user see
+    # which card they're drilling into without scrolling back up.
+    _DASHBOARD_LABELS: dict[str, str] = {cid: title for cid, title, _ in DASHBOARD_CARD_META}
+
+    def _refresh_dashboard(self) -> None:
+        if not hasattr(self, "dashboard"):
+            return
+        sections = self._svc.dashboard_sections()
+        self.dashboard.refresh(sections, date_format=_current_date_format_qt(self._ui_settings))
+
+    def _current_filter_state(self) -> dict[str, object]:
+        """Return a saved-view-shaped snapshot of the Tasks tab filter bar."""
+        fields = sorted(self._search_field_names())
+        return {
+            "search_text": self.search_edit.text(),
+            "search_fields": fields,
+            "hide_closed": bool(self.chk_hide_closed.isChecked()),
+        }
+
+    def _apply_filter_state(self, state: dict[str, object]) -> None:
+        """Apply a saved-view filter payload to the Tasks tab widgets.
+
+        Unknown keys are ignored so older saved views remain usable
+        when the schema grows. The call reloads the task list exactly
+        once after every control is updated to avoid flicker.
+        """
+        # Temporarily suppress the hide_closed reload side effect so we
+        # don't trigger two back-to-back list rebuilds.
+        self.chk_hide_closed.blockSignals(True)
+        try:
+            hide_closed = state.get("hide_closed")
+            if isinstance(hide_closed, bool):
+                self.chk_hide_closed.setChecked(hide_closed)
+            text = state.get("search_text")
+            if isinstance(text, str):
+                self.search_edit.setText(text)
+            raw_fields = state.get("search_fields")
+            if isinstance(raw_fields, list):
+                wanted = {str(f) for f in raw_fields if isinstance(f, str)}
+                field_widgets = {
+                    "title": self.search_title,
+                    "description": self.search_description,
+                    "notes": self.search_notes,
+                    "todos": self.search_todos,
+                    "blockers": self.search_blockers,
+                    "audit": self.search_audit,
+                    "ticket": self.search_ticket,
+                }
+                for name, widget in field_widgets.items():
+                    widget.setChecked(name in wanted)
+        finally:
+            self.chk_hide_closed.blockSignals(False)
+        self._reload_task_list()
+
+    def _apply_dashboard_filter(self, card_id: str) -> None:
+        payload = dict(self._DASHBOARD_FILTERS.get(card_id, {}))
+        if not payload:
+            return
+        bucket = payload.pop("_bucket", None)
+        self._apply_filter_state(payload)
+        self._filter_tasks_to_dashboard_bucket(bucket if isinstance(bucket, str) else None)
+        self._tabs.setCurrentIndex(self._tab_index_tasks)
+        label = self._DASHBOARD_LABELS.get(card_id, card_id)
+        self._notify(f"Tasks filtered to: {label}.")
+
+    def _filter_tasks_to_dashboard_bucket(self, bucket: str | None) -> None:
+        """Shrink the task list to rows matching a dashboard bucket.
+
+        The Tasks tab's existing filter bar cannot express predicates
+        like "due_date < today", so instead of inventing new controls
+        (which would widen the saved-view schema for one card each) we
+        post-filter the list items in place. The visible result
+        matches the card's count and is reversible by clearing the
+        search box.
+        """
+        if bucket is None:
+            return
+        sections = self._svc.dashboard_sections()
+        payload = sections.get(bucket) or {}
+        ids = {int(t.id) for t in (payload.get("rows") or [])}
+        # If the total exceeds the prefetched top N, widen ``ids`` by
+        # recomputing from the full bucket so "Show all" really shows
+        # all matches, not just the top N the card rendered.
+        if int(payload.get("count", 0)) > len(ids):
+            ids = self._dashboard_bucket_full_ids(bucket)
+        for i in range(self.task_list.count()):
+            item = self.task_list.item(i)
+            tid = item.data(Qt.ItemDataRole.UserRole)
+            visible = isinstance(tid, int) and tid in ids
+            item.setHidden(not visible)
+
+    def _dashboard_bucket_full_ids(self, bucket: str) -> set[int]:
+        """Return every task id that belongs to ``bucket`` right now."""
+        sections = self._svc.dashboard_sections(top_n=10_000)
+        payload = sections.get(bucket) or {}
+        return {int(t.id) for t in (payload.get("rows") or [])}
+
+    def _refresh_saved_views_sidebar(self) -> None:
+        if not hasattr(self, "saved_views"):
+            return
+        self.saved_views.set_views(get_saved_views(self._ui_settings))
+
+    def _find_saved_view(self, name: str) -> dict[str, object] | None:
+        key = name.casefold()
+        for view in get_saved_views(self._ui_settings):
+            if view["name"].casefold() == key:
+                return view
+        return None
+
+    def _apply_saved_view(self, name: str) -> None:
+        view = self._find_saved_view(name)
+        if view is None:
+            self._notify(f"Saved view \"{name}\" no longer exists.")
+            self._refresh_saved_views_sidebar()
+            return
+        filters = view.get("filters")
+        if isinstance(filters, dict):
+            self._apply_filter_state(filters)
+        self._notify(f"Saved view applied: {view['name']}.")
+
+    def _save_current_filters_as_view(self) -> None:
+        default = ""
+        current = self.saved_views.selected_name()
+        if current:
+            default = current
+        name, ok = QInputDialog.getText(
+            self,
+            "Save view",
+            "Name for this view:",
+            text=default,
+        )
+        if not ok:
+            return
+        trimmed = name.strip()
+        if not trimmed:
+            self._notify("Saved view name cannot be empty.")
+            return
+        filters = self._current_filter_state()
+        if self._find_saved_view(trimmed) is not None:
+            reply = QMessageBox.question(
+                self,
+                "Replace saved view?",
+                f"\"{trimmed}\" already exists. Replace its filters with the current ones?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        stored = add_saved_view(self._ui_settings, trimmed, filters)
+        if stored is None:
+            self._notify("Could not save that view (name invalid).")
+            return
+        save_ui_settings(self._ui_settings)
+        self._refresh_saved_views_sidebar()
+        self._notify(f"Saved view: {stored['name']}.")
+
+    def _rename_saved_view(self, old_name: str) -> None:
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Rename saved view",
+            "New name:",
+            text=old_name,
+        )
+        if not ok:
+            return
+        trimmed = new_name.strip()
+        if not trimmed:
+            self._notify("Saved view name cannot be empty.")
+            return
+        if trimmed.casefold() == old_name.casefold():
+            # Casing-only rename still proceeds below.
+            pass
+        if rename_saved_view(self._ui_settings, old_name, trimmed):
+            save_ui_settings(self._ui_settings)
+            self._refresh_saved_views_sidebar()
+            self._notify(f"Renamed \"{old_name}\" to \"{trimmed}\".")
+        else:
+            self._notify(
+                f"Could not rename \"{old_name}\" - the target name may already be taken."
+            )
+
+    def _delete_saved_view(self, name: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Delete saved view?",
+            f"Delete saved view \"{name}\"?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        if remove_saved_view(self._ui_settings, name):
+            save_ui_settings(self._ui_settings)
+            self._refresh_saved_views_sidebar()
+            self._notify(f"Deleted saved view \"{name}\".")
+
+    def _move_saved_view(self, name: str, delta: int) -> None:
+        if move_saved_view(self._ui_settings, name, delta):
+            save_ui_settings(self._ui_settings)
+            self._refresh_saved_views_sidebar()
+
+    def _on_tab_changed(self, index: int) -> None:
+        tab_id = self._tab_index_to_id.get(index)
+        if tab_id is None:
+            return
+        # Refresh the dashboard on entry so it can't show stale
+        # counts after a save/close action elsewhere in the app.
+        if tab_id == "dashboard":
+            self._refresh_dashboard()
+        # Persist the last-used tab so the next launch lands here.
+        set_last_tab(self._ui_settings, tab_id)
+        save_ui_settings(self._ui_settings)
+
     def _reload_task_list(self) -> None:
         saved_id = self._current_task_id
         self.task_list.blockSignals(True)
@@ -1837,8 +2152,17 @@ class MainWindow(QMainWindow):
             from_date=start,
             to_date=end,
         )
+        # Event-day shading is theme-aware: using a fixed pale-blue
+        # background meant that on the Dark theme, Fusion's light-gray
+        # day digits faded into the highlight so the user could not
+        # tell which day of the month was flagged without visually
+        # counting from an unflagged neighbour. Pulling colors from the
+        # active theme lets each palette choose a highlight that has
+        # enough contrast for its own day-text color.
+        bg_hex, fg_hex = calendar_event_colors(get_theme_id(self._ui_settings))
         fmt_dot = QTextCharFormat()
-        fmt_dot.setBackground(QColor("#bbdefb"))
+        fmt_dot.setBackground(QColor(bg_hex))
+        fmt_dot.setForeground(QColor(fg_hex))
         seen: set[dt.date] = set()
         for ev in evs:
             d = ev["date"]

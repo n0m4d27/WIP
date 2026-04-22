@@ -32,6 +32,7 @@ from tasktracker.ui.themes import (
     THEMES,
     THEMES_BY_ID,
     Theme,
+    calendar_event_colors,
     get_theme,
     list_themes,
 )
@@ -134,3 +135,36 @@ def test_get_theme_id_coerces_non_string_values() -> None:
     settings = default_ui_settings()
     settings["theme"] = 42  # corrupted on disk
     assert get_theme_id(settings) == DEFAULT_THEME_ID
+
+
+def _is_hex_color(value: str) -> bool:
+    return isinstance(value, str) and value.startswith("#") and len(value) in (4, 7)
+
+
+@pytest.mark.parametrize("theme_id", EXPECTED_THEME_IDS)
+def test_themes_declare_calendar_event_colors(theme_id: str) -> None:
+    """Every built-in theme must declare calendar-day badge colors.
+
+    The Dashboard and Calendar tabs shade flagged day cells with these
+    colors; a theme that forgets them would fall back to hard-coded
+    defaults that don't match its palette (dark theme in particular
+    became illegible before these extras were introduced).
+    """
+    bg, fg = calendar_event_colors(theme_id)
+    assert _is_hex_color(bg), f"{theme_id}: bg {bg!r} is not a #hex color"
+    assert _is_hex_color(fg), f"{theme_id}: fg {fg!r} is not a #hex color"
+    # Sanity check: the bg and fg should differ so there's visible
+    # contrast (we don't test luminance here - the palette author owns
+    # that judgement - just that they aren't literally the same color).
+    assert bg.lower() != fg.lower(), (
+        f"{theme_id} calendar colors collapse to a single color: {bg}"
+    )
+
+
+def test_calendar_event_colors_fall_back_for_unknown_theme() -> None:
+    bg, fg = calendar_event_colors("not-a-theme")
+    assert _is_hex_color(bg) and _is_hex_color(fg)
+    # Unknown id routes through ``get_theme`` which returns the default,
+    # so the returned colors must match the default theme's extras.
+    default_bg, default_fg = calendar_event_colors(DEFAULT_THEME_ID)
+    assert (bg, fg) == (default_bg, default_fg)
