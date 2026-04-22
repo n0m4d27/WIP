@@ -29,6 +29,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 
 from tasktracker.ui.settings_store import DEFAULT_DATE_FORMAT
 
@@ -177,6 +178,46 @@ def format_from_parent(parent) -> str:
         parent_fn = getattr(cur, "parent", None)
         cur = parent_fn() if callable(parent_fn) else None
     return DEFAULT_DATE_FORMAT
+
+
+DISPLAY_TIMEZONE_LOCAL = "local"
+
+
+def is_valid_iana_timezone(name: str) -> bool:
+    """Return True if ``name`` is a loadable IANA timezone identifier."""
+    if not name or not isinstance(name, str):
+        return False
+    try:
+        ZoneInfo(name.strip())
+    except Exception:
+        return False
+    return True
+
+
+def resolve_display_tz(tz_key: str) -> dt.tzinfo:
+    """Resolve settings key ``local`` or an IANA name to a ``tzinfo``."""
+    k = (tz_key or "").strip()
+    if not k or k == DISPLAY_TIMEZONE_LOCAL:
+        local = dt.datetime.now().astimezone().tzinfo
+        return local if local is not None else dt.timezone.utc
+    try:
+        return ZoneInfo(k)
+    except Exception:
+        local = dt.datetime.now().astimezone().tzinfo
+        return local if local is not None else dt.timezone.utc
+
+
+def format_activity_timestamp(when: dt.datetime, tz_key: str) -> str:
+    """Format an aware (or UTC-assumed naive) instant for the activity panel."""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=dt.UTC)
+    tz = resolve_display_tz(tz_key)
+    local = when.astimezone(tz)
+    abbr = local.tzname() or ""
+    base = local.strftime("%Y-%m-%d %H:%M")
+    if abbr:
+        return f"{base} {abbr}"
+    return base
 
 
 def iso_string_to_display(value: str | None, qt_fmt: str | None = None) -> str:

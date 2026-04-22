@@ -1385,6 +1385,91 @@ class TaskService:
         self.session.delete(person)
         self.session.commit()
 
+    def update_person(
+        self, person_id: int, first_name: str, last_name: str, employee_id: str
+    ) -> TaskPerson | None:
+        first = first_name.strip()
+        last = last_name.strip()
+        emp = employee_id.strip()
+        if not first or not last or not emp:
+            return None
+        person = self.session.get(TaskPerson, person_id)
+        if not person:
+            return None
+        if emp != person.employee_id:
+            taken = self.session.scalar(
+                select(TaskPerson).where(TaskPerson.employee_id == emp, TaskPerson.id != person_id)
+            )
+            if taken:
+                return None
+        person.first_name = first
+        person.last_name = last
+        person.employee_id = emp
+        self.session.commit()
+        self.session.refresh(person)
+        return person
+
+    def rename_category(self, category_id: int, name: str) -> TaskCategory | None:
+        cleaned = name.strip()
+        if not cleaned:
+            return None
+        cat = self.session.get(TaskCategory, category_id)
+        if not cat:
+            return None
+        if cat.name == cleaned:
+            return cat
+        taken = self.session.scalar(select(TaskCategory).where(TaskCategory.name == cleaned))
+        if taken:
+            return None
+        cat.name = cleaned
+        self.session.commit()
+        self.session.refresh(cat)
+        return cat
+
+    def rename_subcategory(self, subcategory_id: int, name: str) -> TaskSubCategory | None:
+        cleaned = name.strip()
+        if not cleaned:
+            return None
+        sub = self.session.get(TaskSubCategory, subcategory_id)
+        if not sub:
+            return None
+        if sub.name == cleaned:
+            return sub
+        taken = self.session.scalar(
+            select(TaskSubCategory).where(
+                TaskSubCategory.category_id == sub.category_id,
+                TaskSubCategory.name == cleaned,
+            )
+        )
+        if taken:
+            return None
+        sub.name = cleaned
+        self.session.commit()
+        self.session.refresh(sub)
+        return sub
+
+    def rename_area(self, area_id: int, name: str) -> TaskArea | None:
+        cleaned = name.strip()
+        if not cleaned:
+            return None
+        area = self.session.get(TaskArea, area_id)
+        if not area:
+            return None
+        if area.name == cleaned:
+            return area
+        taken = self.session.scalar(
+            select(TaskArea).where(
+                TaskArea.subcategory_id == area.subcategory_id,
+                TaskArea.name == cleaned,
+            )
+        )
+        if taken:
+            return None
+        area.name = cleaned
+        self.session.commit()
+        self.session.refresh(area)
+        return area
+
     def export_reference_data(self, path: Path) -> None:
         categories_out: list[dict[str, Any]] = []
         for cat in self.list_categories():

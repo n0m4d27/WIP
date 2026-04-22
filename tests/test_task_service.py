@@ -234,3 +234,45 @@ def test_update_task_fields_clear_description(svc: TaskService) -> None:
     loaded = svc.get_task(t.id)
     assert loaded is not None
     assert loaded.description is None
+
+
+def test_rename_category_and_duplicate_blocked(svc: TaskService) -> None:
+    a = svc.add_category("Alpha")
+    b = svc.add_category("Beta")
+    assert a is not None and b is not None
+    renamed = svc.rename_category(a.id, "AlphaPrime")
+    assert renamed is not None and renamed.name == "AlphaPrime"
+    assert svc.rename_category(a.id, "Beta") is None
+    assert svc.rename_category(999_999, "X") is None
+
+
+def test_rename_subcategory_unique_per_category(svc: TaskService) -> None:
+    c = svc.add_category("C")
+    assert c is not None
+    s1 = svc.add_subcategory(c.id, "S1")
+    s2 = svc.add_subcategory(c.id, "S2")
+    assert s1 is not None and s2 is not None
+    assert svc.rename_subcategory(s1.id, "S2") is None
+    assert svc.rename_subcategory(s1.id, "S1b") is not None
+
+
+def test_rename_area_unique_per_subcategory(svc: TaskService) -> None:
+    c = svc.add_category("C")
+    assert c is not None
+    s = svc.add_subcategory(c.id, "S")
+    assert s is not None
+    a1 = svc.add_area(s.id, "A1")
+    a2 = svc.add_area(s.id, "A2")
+    assert a1 is not None and a2 is not None
+    assert svc.rename_area(a1.id, "A2") is None
+    assert svc.rename_area(a1.id, "A1b") is not None
+
+
+def test_update_person_and_employee_id_collision(svc: TaskService) -> None:
+    p1 = svc.add_person("Ada", "Lovelace", "E1")
+    p2 = svc.add_person("Grace", "Hopper", "E2")
+    assert p1 is not None and p2 is not None
+    updated = svc.update_person(p1.id, "Augusta", "Ada", "E1")
+    assert updated is not None
+    assert updated.first_name == "Augusta"
+    assert svc.update_person(p1.id, "A", "B", "E2") is None

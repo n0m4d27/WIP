@@ -70,16 +70,19 @@ from tasktracker.services.shift_service import ShiftResult
 from tasktracker.services.task_service import TaskService
 from tasktracker.ui.calendar_quick_edit_dialog import run_calendar_quick_edit_dialog
 from tasktracker.ui.date_format import (
+    format_activity_timestamp,
     format_date as fmt_date,
     iso_string_to_display,
     reformat_iso_dates_in_text,
 )
 from tasktracker.ui.date_format_dialog import run_date_format_dialog
+from tasktracker.ui.timezone_format_dialog import run_display_timezone_dialog
 from tasktracker.ui.date_widgets import date_edit_with_today_button, qdate_is_blank
 from tasktracker.ui.keyboard_shortcuts_dialog import run_keyboard_shortcuts_dialog
 from tasktracker.ui.shift_scope_dialog import ShiftScopeDialog
 from tasktracker.ui.priority_matrix_dialog import PriorityMatrixDialog
 from tasktracker.ui.reference_data_dialog import run_manage_reference_data_dialog
+from tasktracker.ui.spin_widgets import StepInvertedSpinBox
 from tasktracker.ui.settings_store import (
     KNOWN_TAB_IDS,
     TASK_SECTION_LABELS,
@@ -87,6 +90,7 @@ from tasktracker.ui.settings_store import (
     TASK_SECTION_TAB_LABELS,
     add_saved_view,
     get_date_format_qt,
+    get_display_timezone,
     get_last_tab,
     get_report_params,
     get_saved_views,
@@ -98,6 +102,7 @@ from tasktracker.ui.settings_store import (
     rename_saved_view,
     save_ui_settings,
     set_date_format_qt,
+    set_display_timezone,
     set_last_tab,
     set_report_params,
     set_theme_id,
@@ -377,6 +382,16 @@ class MainWindow(QMainWindow):
         self._refresh_date_dependent_surfaces()
         self._notify(f"Date format set to {chosen}.")
 
+    def _open_display_timezone_settings(self) -> None:
+        current = get_display_timezone(self._ui_settings)
+        chosen = run_display_timezone_dialog(self, current)
+        if chosen is None or chosen == current:
+            return
+        set_display_timezone(self._ui_settings, chosen)
+        save_ui_settings(self._ui_settings)
+        self._refresh_timeline()
+        self._notify(f"Display timezone set to {get_display_timezone(self._ui_settings)}.")
+
     def _apply_date_format_to_widgets(self) -> None:
         """Update every ``QDateEdit`` under this window's widget tree."""
         fmt = get_date_format_qt(self._ui_settings)
@@ -553,6 +568,7 @@ class MainWindow(QMainWindow):
         m_settings.addAction("Customize task panel layout…", self._open_task_panel_layout)
         m_settings.addAction("Keyboard shortcuts…", self._open_keyboard_shortcuts)
         m_settings.addAction("Date format…", self._open_date_format_settings)
+        m_settings.addAction("Display timezone…", self._open_display_timezone_settings)
         m_settings.addSeparator()
         m_settings.addAction("Manage categories and people…", self._open_reference_data_manager)
         m_settings.addAction("Export categories and people…", self._export_reference_data)
@@ -713,13 +729,19 @@ class MainWindow(QMainWindow):
         for s in TaskStatus:
             self.f_status.addItem(s.value.replace("_", " ").title(), s.value)
 
-        self.f_impact = QSpinBox()
+        self.f_impact = StepInvertedSpinBox()
         self.f_impact.setRange(1, 3)
         self.f_impact.setValue(2)
-        self.f_urgency = QSpinBox()
+        self.f_urgency = StepInvertedSpinBox()
         self.f_urgency.setRange(1, 3)
         self.f_urgency.setValue(2)
         self.f_priority_label = QLabel("")
+        _pd_w = max(
+            self.f_priority_label.fontMetrics().horizontalAdvance(priority_display(pr))
+            for pr in range(1, 6)
+        )
+        self.f_priority_label.setMinimumWidth(_pd_w)
+        self.f_priority_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.f_impact.valueChanged.connect(self._refresh_priority_label)
         self.f_urgency.valueChanged.connect(self._refresh_priority_label)
 
@@ -2100,8 +2122,10 @@ class MainWindow(QMainWindow):
             self.timeline.clear()
             return
         lines = []
+        tz_key = get_display_timezone(self._ui_settings)
         for e in self._svc.combined_timeline(self._current_task_id):
-            lines.append(f"{e.at.isoformat()} [{e.kind}] {e.summary}")
+            ts = format_activity_timestamp(e.at, tz_key)
+            lines.append(f"{ts} [{e.kind}] {e.summary}")
             if e.detail:
                 lines.append(f"    {e.detail}")
         self.timeline.setPlainText("\n".join(lines))
@@ -2218,7 +2242,10 @@ class MainWindow(QMainWindow):
         the dialog's "Open in Tasks tab for full edit" link instead, jump
         to the Tasks tab and select the task there."""
         saved, successor, open_full = run_calendar_quick_edit_dialog(
-            self, self._svc, task_id
+            self,
+            self._svc,
+            task_id,
+            display_timezone=get_display_timezone(self._ui_settings),
         )
         if open_full:
             self._jump_to_task_in_tasks_tab(task_id)

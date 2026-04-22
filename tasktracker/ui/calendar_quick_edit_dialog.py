@@ -61,8 +61,14 @@ from tasktracker.domain.priority import compute_priority, priority_display
 from tasktracker.domain.ticket import format_task_ticket
 from tasktracker.services.shift_service import ShiftResult, ShiftService
 from tasktracker.services.task_service import TaskService
-from tasktracker.ui.date_format import format_date, format_from_parent
+from tasktracker.ui.date_format import (
+    DISPLAY_TIMEZONE_LOCAL,
+    format_activity_timestamp,
+    format_date,
+    format_from_parent,
+)
 from tasktracker.ui.date_widgets import date_edit_with_today_button, qdate_is_blank
+from tasktracker.ui.spin_widgets import StepInvertedSpinBox
 from tasktracker.ui.todo_dialog import run_add_todo_dialog, run_edit_todo_dialog
 
 
@@ -114,11 +120,19 @@ class CalendarQuickEditDialog(QDialog):
 
     open_full_editor_requested = Signal(int)
 
-    def __init__(self, parent: QWidget | None, svc: TaskService, task: Task) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None,
+        svc: TaskService,
+        task: Task,
+        *,
+        display_timezone: str = DISPLAY_TIMEZONE_LOCAL,
+    ) -> None:
         super().__init__(parent)
         self._svc = svc
         self._parent = parent
         self._task_id = task.id
+        self._display_tz = display_timezone
         self._task_ticket = format_task_ticket(task.ticket_number)
         self.setWindowTitle(f"Quick edit - {self._task_ticket} {task.title}")
         self.setModal(True)
@@ -174,13 +188,19 @@ class CalendarQuickEditDialog(QDialog):
         iu_row = QWidget()
         iu_lay = QHBoxLayout(iu_row)
         iu_lay.setContentsMargins(0, 0, 0, 0)
-        self.f_impact = QSpinBox()
+        self.f_impact = StepInvertedSpinBox()
         self.f_impact.setRange(1, 3)
         self.f_impact.setValue(task.impact)
-        self.f_urgency = QSpinBox()
+        self.f_urgency = StepInvertedSpinBox()
         self.f_urgency.setRange(1, 3)
         self.f_urgency.setValue(task.urgency)
         self.f_priority_label = QLabel("")
+        _pd_w = max(
+            self.f_priority_label.fontMetrics().horizontalAdvance(priority_display(pr))
+            for pr in range(1, 6)
+        )
+        self.f_priority_label.setMinimumWidth(_pd_w)
+        self.f_priority_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.f_impact.valueChanged.connect(self._refresh_priority_label)
         self.f_urgency.valueChanged.connect(self._refresh_priority_label)
         iu_lay.addWidget(QLabel("I"))
@@ -486,7 +506,8 @@ class CalendarQuickEditDialog(QDialog):
                 latest_body = latest.body_html
             snippet = _snippet(latest_body)
             prefix = "[System] " if n.is_system else ""
-            label = f"{n.created_at.strftime('%Y-%m-%d %H:%M')}  {prefix}{snippet}"
+            ts = format_activity_timestamp(n.created_at, self._display_tz)
+            label = f"{ts}  {prefix}{snippet}"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, n.id)
             self.lst_notes.addItem(item)
@@ -502,9 +523,10 @@ class CalendarQuickEditDialog(QDialog):
         if note.versions:
             latest = max(note.versions, key=lambda v: v.version_seq)
             body = latest.body_html
+        ts = format_activity_timestamp(note.created_at, self._display_tz)
         viewer = _NoteViewerDialog(
             self,
-            f"Note - {note.created_at.strftime('%Y-%m-%d %H:%M')}",
+            f"Note - {ts}",
             body,
         )
         viewer.exec()
@@ -596,14 +618,19 @@ def _snippet(html_body: str, *, limit: int = 80) -> str:
 
 
 def run_calendar_quick_edit_dialog(
-    parent: QWidget | None, svc: TaskService, task_id: int
+    parent: QWidget | None,
+    svc: TaskService,
+    task_id: int,
+    *,
+    display_timezone: str | None = None,
 ) -> tuple[bool, Task | None, bool]:
     """Open the quick-edit dialog. Returns ``(saved, spawned_successor,
     open_full_requested)``."""
     task = svc.get_task(task_id)
     if task is None:
         return (False, None, False)
-    dlg = CalendarQuickEditDialog(parent, svc, task)
+    tz = display_timezone if display_timezone is not None else DISPLAY_TIMEZONE_LOCAL
+    dlg = CalendarQuickEditDialog(parent, svc, task, display_timezone=tz)
     open_full_flag = {"value": False}
 
     def _on_open_full(_tid: int) -> None:

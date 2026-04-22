@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -56,6 +57,9 @@ class _ReferenceDataDialog(QDialog):
         b = QPushButton("Add…")
         b.clicked.connect(self._add_category)
         cat_btns.addWidget(b)
+        b = QPushButton("Edit…")
+        b.clicked.connect(self._edit_category)
+        cat_btns.addWidget(b)
         b = QPushButton("Remove")
         b.clicked.connect(self._delete_category)
         cat_btns.addWidget(b)
@@ -71,6 +75,9 @@ class _ReferenceDataDialog(QDialog):
         b = QPushButton("Add…")
         b.clicked.connect(self._add_subcategory)
         sub_btns.addWidget(b)
+        b = QPushButton("Edit…")
+        b.clicked.connect(self._edit_subcategory)
+        sub_btns.addWidget(b)
         b = QPushButton("Remove")
         b.clicked.connect(self._delete_subcategory)
         sub_btns.addWidget(b)
@@ -84,6 +91,9 @@ class _ReferenceDataDialog(QDialog):
         area_btns = QHBoxLayout()
         b = QPushButton("Add…")
         b.clicked.connect(self._add_area)
+        area_btns.addWidget(b)
+        b = QPushButton("Edit…")
+        b.clicked.connect(self._edit_area)
         area_btns.addWidget(b)
         b = QPushButton("Remove")
         b.clicked.connect(self._delete_area)
@@ -107,6 +117,9 @@ class _ReferenceDataDialog(QDialog):
         row = QHBoxLayout()
         b = QPushButton("Add…")
         b.clicked.connect(self._add_person)
+        row.addWidget(b)
+        b = QPushButton("Edit…")
+        b.clicked.connect(self._edit_person)
         row.addWidget(b)
         b = QPushButton("Remove")
         b.clicked.connect(self._delete_person)
@@ -203,6 +216,24 @@ class _ReferenceDataDialog(QDialog):
         self._svc.delete_category(cat_id)
         self._reload_categories()
 
+    def _edit_category(self) -> None:
+        cat_id = self._selected_id(self.cat_list)
+        if cat_id is None:
+            return
+        item = self.cat_list.currentItem()
+        cur = item.text() if item else ""
+        name, ok = QInputDialog.getText(self, "Rename category", "Category name:", text=cur)
+        if not ok:
+            return
+        if self._svc.rename_category(cat_id, name) is None:
+            QMessageBox.warning(
+                self,
+                "Rename category",
+                "Could not rename (empty name, duplicate, or invalid).",
+            )
+        else:
+            self._reload_categories()
+
     def _add_subcategory(self) -> None:
         cat_id = self._selected_id(self.cat_list)
         if cat_id is None:
@@ -222,6 +253,24 @@ class _ReferenceDataDialog(QDialog):
         self._svc.delete_subcategory(sub_id)
         self._reload_subcategories()
 
+    def _edit_subcategory(self) -> None:
+        sub_id = self._selected_id(self.sub_list)
+        if sub_id is None:
+            return
+        item = self.sub_list.currentItem()
+        cur = item.text() if item else ""
+        name, ok = QInputDialog.getText(self, "Rename sub-category", "Sub-category name:", text=cur)
+        if not ok:
+            return
+        if self._svc.rename_subcategory(sub_id, name) is None:
+            QMessageBox.warning(
+                self,
+                "Rename sub-category",
+                "Could not rename (empty name, duplicate in this category, or invalid).",
+            )
+        else:
+            self._reload_subcategories()
+
     def _add_area(self) -> None:
         sub_id = self._selected_id(self.sub_list)
         if sub_id is None:
@@ -240,6 +289,24 @@ class _ReferenceDataDialog(QDialog):
             return
         self._svc.delete_area(area_id)
         self._reload_areas()
+
+    def _edit_area(self) -> None:
+        area_id = self._selected_id(self.area_list)
+        if area_id is None:
+            return
+        item = self.area_list.currentItem()
+        cur = item.text() if item else ""
+        name, ok = QInputDialog.getText(self, "Rename area", "Area name:", text=cur)
+        if not ok:
+            return
+        if self._svc.rename_area(area_id, name) is None:
+            QMessageBox.warning(
+                self,
+                "Rename area",
+                "Could not rename (empty name, duplicate in this sub-category, or invalid).",
+            )
+        else:
+            self._reload_areas()
 
     def _add_person(self) -> None:
         d = QDialog(self)
@@ -268,6 +335,37 @@ class _ReferenceDataDialog(QDialog):
             return
         self._svc.delete_person(person_id)
         self._reload_people()
+
+    def _edit_person(self) -> None:
+        person_id = self._selected_id(self.people_list)
+        if person_id is None:
+            return
+        person = next((p for p in self._svc.list_people() if p.id == person_id), None)
+        if person is None:
+            return
+        d = QDialog(self)
+        d.setWindowTitle("Edit person")
+        form = QFormLayout(d)
+        first = QLineEdit(person.first_name)
+        last = QLineEdit(person.last_name)
+        emp = QLineEdit(person.employee_id)
+        form.addRow("First name", first)
+        form.addRow("Last name", last)
+        form.addRow("Employee ID", emp)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        form.addRow(bb)
+        if d.exec() != QDialog.DialogCode.Accepted:
+            return
+        if self._svc.update_person(person_id, first.text(), last.text(), emp.text()) is None:
+            QMessageBox.warning(
+                self,
+                "Edit person",
+                "Could not save (missing fields or employee ID already in use).",
+            )
+        else:
+            self._reload_people()
 
 
 def run_manage_reference_data_dialog(parent, svc: TaskService) -> None:

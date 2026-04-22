@@ -1,0 +1,22 @@
+{
+  "task_panel_section_order": [
+    "todos",
+    "notes",
+    "blockers",
+    "recurring",
+    "activity"
+  ],
+  "shortcuts": {
+    "new_task": "Ctrl+N",
+    "save_task": "Ctrl+S",
+    "close_task": "Ctrl+Shift+C"
+  },
+  "date_format": "yyyy-MM-dd",
+  "display_timezone": "local",
+  "theme": "dark",
+  "last_tab": "tasks",
+  "saved_views": [],
+  "reports": {
+    "last_params": {}
+  }
+}

@@ -11,17 +11,24 @@ import datetime as dt
 
 from tasktracker.ui.date_format import (
     DATE_FORMAT_PRESETS,
+    DISPLAY_TIMEZONE_LOCAL,
+    format_activity_timestamp,
     format_date,
     iso_string_to_display,
     qt_to_py_format,
     reformat_iso_dates_in_text,
+    resolve_display_tz,
 )
 from tasktracker.ui.settings_store import (
     DEFAULT_DATE_FORMAT,
+    DEFAULT_DISPLAY_TIMEZONE,
     _coerce_date_format,
+    _coerce_display_timezone,
     default_ui_settings,
     get_date_format_qt,
+    get_display_timezone,
     set_date_format_qt,
+    set_display_timezone,
 )
 
 
@@ -122,3 +129,45 @@ def test_get_date_format_qt_handles_missing_key() -> None:
     # Simulates a settings dict persisted before the feature landed.
     legacy = {"task_panel_section_order": [], "shortcuts": {}}
     assert get_date_format_qt(legacy) == DEFAULT_DATE_FORMAT
+
+
+def test_default_settings_include_display_timezone() -> None:
+    s = default_ui_settings()
+    assert s["display_timezone"] == DEFAULT_DISPLAY_TIMEZONE
+    assert get_display_timezone(s) == DEFAULT_DISPLAY_TIMEZONE
+
+
+def test_coerce_display_timezone_accepts_local_and_utc() -> None:
+    assert _coerce_display_timezone("local") == "local"
+    assert _coerce_display_timezone("UTC") == "UTC"
+    assert _coerce_display_timezone("  America/New_York  ") == "America/New_York"
+
+
+def test_coerce_display_timezone_rejects_garbage() -> None:
+    assert _coerce_display_timezone(None) == DEFAULT_DISPLAY_TIMEZONE
+    assert _coerce_display_timezone("Not/A/Zone") == DEFAULT_DISPLAY_TIMEZONE
+    assert _coerce_display_timezone("x" * 500) == DEFAULT_DISPLAY_TIMEZONE
+
+
+def test_set_display_timezone_round_trip() -> None:
+    s = default_ui_settings()
+    set_display_timezone(s, "Europe/Paris")
+    assert get_display_timezone(s) == "Europe/Paris"
+
+
+def test_format_activity_timestamp_utc_fixed_instant() -> None:
+    when = dt.datetime(2026, 4, 22, 15, 30, tzinfo=dt.UTC)
+    out = format_activity_timestamp(when, "America/New_York")
+    assert "2026-04-22" in out
+    assert "11:30" in out
+
+
+def test_format_activity_timestamp_naive_assumed_utc() -> None:
+    when = dt.datetime(2026, 1, 1, 0, 0)
+    out = format_activity_timestamp(when, "UTC")
+    assert out.startswith("2026-01-01 00:00")
+
+
+def test_resolve_display_tz_local_is_tzinfo() -> None:
+    tz = resolve_display_tz(DISPLAY_TIMEZONE_LOCAL)
+    assert isinstance(tz, dt.tzinfo)
