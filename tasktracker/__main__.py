@@ -13,6 +13,7 @@ from tasktracker.db.schema_upgrade import upgrade_schema
 from tasktracker.db.session import get_engine, init_schema, make_session_factory
 from tasktracker.paths import default_data_dir
 from tasktracker.security.crypto import decrypt_file, encrypt_file
+from tasktracker.vault_attachments_crypto import decrypt_attachments_folder, encrypt_attachments_folder
 from tasktracker.security.password import (
     create_auth_record,
     derive_fernet,
@@ -185,9 +186,11 @@ def main() -> None:
             upgrade_schema(engine)
 
     assert fernet is not None
+    decrypt_attachments_folder(data_dir, fernet)
 
     def secure_shutdown() -> None:
         engine.dispose()
+        encrypt_attachments_folder(data_dir, fernet)
         if db_plain.exists():
             encrypt_file(db_plain, db_enc, fernet)
             db_plain.unlink()

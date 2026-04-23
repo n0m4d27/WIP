@@ -113,6 +113,7 @@ Surface attention-worthy tasks before they fall off the user's radar:
 - [ ] `tasktracker/resources/user_guide.html` — "Reminders" and
       "Aging indicators" sections.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — reminders + aging indicators.
 
 ## Risks / open questions
 

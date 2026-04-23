@@ -253,6 +253,12 @@ Field names from Access are inputs only; schema uses Pythonic consistency:
 - **Single-level undo:** `MainWindow` caches the most recent `ShiftResult` in `self._last_bulk_shift` and toggles **Edit → Undo last bulk shift** (**Ctrl+Shift+Z**, also available from the task-list context menu and the calendar dialog's strip) between enabled and disabled with a tooltip that describes what would be reverted ("Revert {n} changes applied at {ts}"). Undo clears the cached result so it can only be applied once, by design. Non-shift edits between the shift and the undo will fail their individual rows via the optimistic-lock check and be skipped cleanly rather than overwriting fresh work.
 - **Audit:** `apply_shift` writes one `bulk_shift` entry in the change log per affected task (summary line + the plan's `params`) so reports / compliance exports still see each row's provenance.
 
+## Task attachments (plan 04)
+- **Per-file encryption at rest:** While the vault is unlocked, files live as plaintext under `<vault>/attachments/<task_id>/` with content-addressed names (`<sha256>_<original base name>`, with a numeric suffix if the same task re-adds a colliding name). On `secure_shutdown`, each plaintext file is encrypted with the same Fernet key as `tasks.db`, written via a `.enc.tmp` sibling, atomically renamed to `<name>.enc`, then the plaintext is removed. On startup, `decrypt_attachments_folder` runs after the database is decrypted: stale `.enc` siblings are deleted when plaintext already exists (crash recovery), then each remaining `*.enc` is decrypted back to plaintext and the ciphertext removed.
+- **Why not a single tarball:** Simpler incremental add/remove during a session and clearer per-file crash boundaries; the trade-off is many small Fernet payloads instead of one archive.
+- **Open externally:** `MainWindow` creates a per-run temp directory (`tempfile.mkdtemp`) under the OS temp root; `materialize_attachment_open_copy` copies vault bytes there and `QDesktopServices` opens the copy. The temp tree is removed on window close so decrypted copies do not linger.
+- **ORM + disk:** `TaskAttachment` rows cascade-delete with tasks; `delete_task` additionally `rmtree`s `attachments/<task_id>/` after commit so orphaned bytes cannot accumulate if SQLAlchemy already removed rows.
+
 ## Deferred Decisions
 - Authentication/authorization model (single-user desktop may stay minimal).
 - Notification delivery channel (email/Teams/etc.).

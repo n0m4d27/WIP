@@ -96,6 +96,7 @@ indicators so a parent reflects the state of its children at a glance.
 - [ ] `tasktracker/resources/user_guide.html` — "Parent and child tasks"
       section.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — parent/child tasks and rollup rules.
 
 ## Risks / open questions
 

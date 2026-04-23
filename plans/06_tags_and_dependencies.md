@@ -116,6 +116,7 @@ cleanly express today:
 - [ ] `tasktracker/resources/user_guide.html` — Tags section and Dependencies
       section.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — tags + dependencies model and surfaces.
 
 ## Risks / open questions
 

@@ -10,6 +10,12 @@ This doc is the **forward-looking** counterpart to `../tech_decisions.md`
 plan lands, a short decision note goes into `tech_decisions.md` and the row
 below is marked Done.
 
+**Documentation layers:** End-user procedures live in
+`../tasktracker/resources/user_guide.html`. The **feature catalog** (what
+shipped, where in the UI, what persists where) lives in `../FEATURE_GUIDE.md`
+and must be updated whenever a plan adds or materially changes user-visible
+behavior — in the same pass as the user guide and plan checkboxes.
+
 ## How to use this doc
 
 1. **Pick work.** Scan the pipeline table for the topmost row whose `Status` is
@@ -21,7 +27,9 @@ below is marked Done.
    Update the doc in place if scope shifts meaningfully; log the deviation in
    the [Decisions log](#decisions-log) section below.
 4. **Land the plan.** Run the plan's validation checklist. On success:
-   - Tick the docs checkboxes in the plan doc itself.
+   - Tick the docs checkboxes in the plan doc itself (including
+     `../FEATURE_GUIDE.md` — add or extend the catalog entry for new
+     capabilities).
    - Mark the row below as `Done` with `Finished` date.
    - Append a short decision note in `../tech_decisions.md`.
    - Move discovered follow-ups to the [Follow-ups discovered](#follow-ups-discovered) table.
@@ -37,7 +45,7 @@ below is marked Done.
 | 01 | [Dashboard and saved views](01_dashboard_and_saved_views.md)       | 1    | Done        | 2026-04-17 | 2026-04-17 | Dashboard tab + saved-views sidebar shipped. Last-tab restore + forward-compatible view schema included. |
 | 02 | [Notes full-text search](02_notes_fulltext_search.md)              | 1    | Done        | 2026-04-23 | 2026-04-23 | FTS5 `task_search_fts`; service-layer sync; snippets in task list tooltips. |
 | 03 | [Task templates](03_task_templates.md)                             | 1    | Done        | 2026-04-23 | 2026-04-23 | Templates + JSON I/O; New from template… draft then Save; `delete_task` for FTS. |
-| 04 | [Attachments](04_attachments.md)                                   | 1    | Not started |            |            |       |
+| 04 | [Attachments](04_attachments.md)                                   | 1    | Done        | 2026-04-23 | 2026-04-23 | Per-file Fernet `.enc` at rest; `task_attachments`; inline section + temp open. |
 | 05 | [Quick capture](05_quick_capture.md)                               | 1    | Not started |            |            |       |
 | 06 | [Tags and task dependencies](06_tags_and_dependencies.md)          | 2    | Not started |            |            |       |
 | 07 | [Child tasks and rollup](07_child_tasks_rollup.md)                 | 2    | Not started |            |            |       |
@@ -104,3 +112,4 @@ so history stays intact and the plan doc itself can be revised cleanly.
 | 2026-04-17 | 01 | Skipped auto-applying the last-used saved view at startup. Implemented only last-used *tab* restore. | The plan itself flagged this as optional + opt-in. Deferring avoids surprising users with yesterday's filters at launch; can revisit if explicit demand appears. |
 | 2026-04-23 | 02 | Chose **service-layer** FTS sync (`sync_task_search_fts` on task / note writes) instead of SQL triggers. | Easier to test, shares HTML stripping with the rest of the app, and avoids maintaining trigger SQL; trade-off is any future raw SQL writers must call sync or rely on count-mismatch backfill on upgrade. |
 | 2026-04-23 | 03 | **New from template** keeps an **unsaved draft** until **Save Task** (plan text allowed either pattern; draft avoids orphan tasks if the user backs out). | Matches plan wording and prevents half-created rows when the user cancels after editing. |
+| 2026-04-23 | 04 | **Per-file** Fernet encryption for the `attachments/` tree (`.enc` siblings + atomic `.tmp` rename) instead of a tarball. | Simpler add/remove during a session and clearer crash recovery than repacking an archive on every close. |

@@ -4,7 +4,10 @@ import calendar
 import datetime as dt
 import html as htmllib
 import json
+import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt, QTimer
@@ -69,6 +72,7 @@ from tasktracker.services.excel_export import (
 from tasktracker.services.reporting_service import ReportingService, ReportResult
 from tasktracker.services.shift_service import ShiftResult
 from tasktracker.services.task_service import TaskService
+from tasktracker.ui.attachments_panel import AttachmentsSection
 from tasktracker.ui.calendar_quick_edit_dialog import run_calendar_quick_edit_dialog
 from tasktracker.ui.date_format import (
     format_activity_timestamp,
@@ -188,8 +192,10 @@ class MainWindow(QMainWindow):
         self._engine = engine
         self._secure_shutdown = secure_shutdown
         self._session_factory = session_factory
+        self._vault_root = Path(os.environ["TASKTRACKER_DATA"]).resolve()
+        self._attach_open_temp = Path(tempfile.mkdtemp(prefix="tasktracker_open_"))
         self._session = session_factory()
-        self._svc = TaskService(self._session)
+        self._svc = TaskService(self._session, self._vault_root)
         self._current_task_id: int | None = None
         self._task_search_snippets: dict[int, str] = {}
         self._new_task_draft_mode: bool = False
@@ -220,7 +226,7 @@ class MainWindow(QMainWindow):
     def _session_reset(self) -> None:
         self._session.close()
         self._session = self._session_factory()
-        self._svc = TaskService(self._session)
+        self._svc = TaskService(self._session, self._vault_root)
 
     @staticmethod
     def _select_list_item_by_id(list_widget: QListWidget, item_id: int | None) -> bool:
@@ -1008,6 +1014,14 @@ class MainWindow(QMainWindow):
         self.btn_rec_save.clicked.connect(self._save_recurrence)
         rec_l.addWidget(self.btn_rec_save)
         self._section_by_id["recurring"] = rec_box
+
+        self._attachments_section = AttachmentsSection(
+            self._svc,
+            self._attach_open_temp,
+            on_changed=self._load_task_detail,
+            parent=self,
+        )
+        self._section_by_id["attachments"] = self._attachments_section
 
         tl_box = QGroupBox("Activity (audit + notes)")
         tl_l = QVBoxLayout(tl_box)
@@ -1896,6 +1910,7 @@ class MainWindow(QMainWindow):
         self.rec_template.clear()
         self.lbl_next_ms.setText("—")
         self._reload_task_taxonomy_inputs()
+        self._attachments_section.refresh(None)
 
     def _on_task_selected(
         self, cur: QListWidgetItem | None, prev: QListWidgetItem | None
@@ -2007,6 +2022,7 @@ class MainWindow(QMainWindow):
 
         self._reload_task_taxonomy_inputs(task)
         self._refresh_timeline()
+        self._attachments_section.refresh(task)
 
     def _refresh_priority_label(self) -> None:
         try:
@@ -2233,6 +2249,7 @@ class MainWindow(QMainWindow):
         for sort_order, tit, ms in sorted(self._pending_seed_todos, key=lambda x: x[0]):
             ms_s = fmt_date(ms, fmt) if ms else ""
             self.todo_list.addItem(f"{tit} [{ms_s}]")
+        self._attachments_section.refresh(None)
 
     def _add_todo(self) -> None:
         if self._new_task_draft_mode:
@@ -2768,4 +2785,8 @@ class MainWindow(QMainWindow):
         self._session.close()
         if self._secure_shutdown is not None:
             self._secure_shutdown()
+        try:
+            shutil.rmtree(self._attach_open_temp, ignore_errors=True)
+        except Exception:
+            pass
         super().closeEvent(event)

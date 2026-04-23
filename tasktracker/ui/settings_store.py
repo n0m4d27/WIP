@@ -35,13 +35,21 @@ SAVED_VIEW_SCHEMA_VERSION: int = 1
 _MAX_SAVED_VIEW_NAME_LEN: int = 200
 
 # Ordered section ids for the movable blocks below core task fields on the Tasks tab.
-TASK_SECTION_IDS: tuple[str, ...] = ("todos", "notes", "blockers", "recurring", "activity")
+TASK_SECTION_IDS: tuple[str, ...] = (
+    "todos",
+    "notes",
+    "blockers",
+    "recurring",
+    "attachments",
+    "activity",
+)
 
 TASK_SECTION_LABELS: dict[str, str] = {
     "todos": "Todos (ordered)",
     "notes": "Notes (rich text)",
     "blockers": "Blockers",
     "recurring": "Recurring (template todos for next instance)",
+    "attachments": "Attachments",
     "activity": "Activity (audit + notes)",
 }
 
@@ -54,6 +62,7 @@ TASK_SECTION_PLACEMENT: dict[str, str] = {
     "todos": "inline",
     "blockers": "inline",
     "recurring": "inline",
+    "attachments": "inline",
     "notes": "tab",
     "activity": "tab",
 }

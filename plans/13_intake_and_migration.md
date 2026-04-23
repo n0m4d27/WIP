@@ -123,6 +123,7 @@ Two related intake paths that reduce manual task entry:
 - [ ] `tasktracker/resources/user_guide.html` — "Intake" section covering
       both CSV and email drop.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — intake / migration workflows.
 
 ## Risks / open questions
 

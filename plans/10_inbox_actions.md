@@ -113,6 +113,7 @@ inbox-style triage surface:
 - [ ] `tasktracker/resources/user_guide.html` — new "Snooze" and
       "Bulk edit" subsections.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — snooze + bulk edit behavior.
 
 ## Risks / open questions
 

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import hashlib
+import os
 import html
 import json
+import mimetypes
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -19,6 +23,7 @@ from tasktracker.db.models import (
     TaskArea,
     TaskCategory,
     Task,
+    TaskAttachment,
     TaskBlocker,
     TaskNote,
     TaskNoteVersion,
@@ -29,6 +34,8 @@ from tasktracker.db.models import (
     TaskUpdateLog,
     TodoItem,
 )
+from tasktracker.paths import attachments_dir
+from tasktracker.vault_attachments_crypto import purge_task_attachments_folder
 from tasktracker.domain.enums import RecurrenceGenerationMode, TaskStatus
 from tasktracker.domain.priority import compute_priority, priority_display
 
@@ -427,8 +434,120 @@ _UNSET = object()
 
 
 class TaskService:
-    def __init__(self, session: Session):
+    ATTACHMENT_SOFT_CAP_BYTES: int = 100 * 1024 * 1024
+
+    def __init__(self, session: Session, vault_root: Path | None = None):
         self.session = session
+        self.vault_root = Path(vault_root).resolve() if vault_root is not None else None
+
+    @staticmethod
+    def _safe_attachment_filename(orig: str) -> str:
+        name = Path(orig).name.strip()
+        if not name or name in (".", ".."):
+            return "file"
+        return name[:240]
+
+    def add_task_attachment(
+        self,
+        task_id: int,
+        source: Path,
+        *,
+        confirm_large: bool = False,
+    ) -> tuple[TaskAttachment | None, str | None]:
+        """Copy ``source`` into the vault and create a row. Returns ``(row, error)``.
+
+        ``error`` is ``\"oversize\"`` when the file exceeds :attr:`ATTACHMENT_SOFT_CAP_BYTES`
+        and ``confirm_large`` is false; ``\"no_vault\"`` when no vault root was configured.
+        """
+        if self.vault_root is None:
+            return None, "no_vault"
+        task = self.session.get(Task, task_id)
+        if not task:
+            return None, "missing_task"
+        src = Path(source).expanduser().resolve()
+        if not src.is_file():
+            return None, "missing_file"
+        size = int(src.stat().st_size)
+        if size > self.ATTACHMENT_SOFT_CAP_BYTES and not confirm_large:
+            return None, "oversize"
+        sha = hashlib.sha256()
+        with open(src, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                sha.update(chunk)
+        sha_hex = sha.hexdigest()
+        base_name = self._safe_attachment_filename(src.name)
+        dest_dir = attachments_dir(self.vault_root) / str(task_id)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"{sha_hex}_{base_name}"
+        candidate = dest_dir / stem
+        n = 2
+        while candidate.exists():
+            p = Path(stem)
+            candidate = dest_dir / f"{p.stem}_{n}{p.suffix}"
+            n += 1
+        shutil.copy2(src, candidate)
+        relpath = candidate.relative_to(self.vault_root.resolve()).as_posix()
+        mime, _ = mimetypes.guess_type(src.name)
+        row = TaskAttachment(
+            task_id=task_id,
+            display_name=base_name,
+            storage_relpath=relpath,
+            content_sha256=sha_hex,
+            size_bytes=size,
+            mime_hint=mime,
+        )
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+        return row, None
+
+    def remove_task_attachment(self, attachment_id: int) -> bool:
+        if self.vault_root is None:
+            return False
+        row = self.session.get(TaskAttachment, attachment_id)
+        if not row:
+            return False
+        rel = row.storage_relpath.replace("/", os.sep)
+        abs_path = self.vault_root / rel
+        self.session.delete(row)
+        self.session.commit()
+        try:
+            abs_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return True
+
+    def rename_task_attachment(self, attachment_id: int, display_name: str) -> bool:
+        row = self.session.get(TaskAttachment, attachment_id)
+        if not row:
+            return False
+        cleaned = display_name.strip()
+        if not cleaned:
+            return False
+        row.display_name = cleaned[:500]
+        self.session.commit()
+        return True
+
+    def materialize_attachment_open_copy(self, attachment_id: int, dest_dir: Path) -> Path | None:
+        """Copy vault plaintext into ``dest_dir`` for opening with an external app."""
+        if self.vault_root is None:
+            return None
+        row = self.session.get(TaskAttachment, attachment_id)
+        if not row:
+            return None
+        rel = row.storage_relpath.replace("/", os.sep)
+        src = self.vault_root / rel
+        if not src.is_file():
+            return None
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        safe = self._safe_attachment_filename(row.display_name)
+        dest = dest_dir / safe
+        if dest.exists():
+            stem = Path(safe).stem
+            suf = Path(safe).suffix
+            dest = dest_dir / f"{stem}_{attachment_id}{suf}"
+        shutil.copy2(src, dest)
+        return dest
 
     def _next_ticket_number(self) -> int:
         self.session.flush()
@@ -621,6 +740,7 @@ class TaskService:
                 selectinload(Task.todos),
                 selectinload(Task.notes).selectinload(TaskNote.versions),
                 selectinload(Task.blockers),
+                selectinload(Task.attachments),
                 selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
                 selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),
                 selectinload(Task.person),
@@ -637,6 +757,8 @@ class TaskService:
         self.session.flush()
         sync_task_search_fts(self.session, tid)
         self.session.commit()
+        if self.vault_root is not None:
+            purge_task_attachments_folder(self.vault_root, tid)
         return True
 
     def create_task(

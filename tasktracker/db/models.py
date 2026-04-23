@@ -71,8 +71,32 @@ class Task(Base):
     recurring_rule: Mapped["RecurringRule | None"] = relationship(
         back_populates="task", cascade="all, delete-orphan", uselist=False
     )
+    attachments: Mapped[list["TaskAttachment"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskAttachment.created_at",
+    )
     area: Mapped["TaskArea | None"] = relationship(back_populates="tasks")
     person: Mapped["TaskPerson | None"] = relationship(back_populates="tasks")
+
+
+class TaskAttachment(Base):
+    """Vault-local file per task (plan 04); plaintext under ``attachments/`` while unlocked."""
+
+    __tablename__ = "task_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    display_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    storage_relpath: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    mime_hint: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    task: Mapped["Task"] = relationship(back_populates="attachments")
 
 
 class TaskCategory(Base):

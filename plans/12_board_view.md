@@ -87,6 +87,7 @@ None. The board is a pure view over existing data.
       drag-drop field dispatch rules.
 - [ ] `tasktracker/resources/user_guide.html` — new "Board view" section.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — board view axes, gestures, persistence.
 
 ## Risks / open questions
 

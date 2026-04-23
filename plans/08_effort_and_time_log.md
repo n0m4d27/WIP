@@ -115,6 +115,7 @@ this week" can be answered from inside the app.
       entry immutability position (editable).
 - [ ] `tasktracker/resources/user_guide.html` — "Effort and time log" section.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — effort / time log surfaces and data model.
 
 ## Risks / open questions
 

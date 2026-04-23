@@ -102,6 +102,7 @@ None. Everything is computed from existing tables.
 - [ ] `tasktracker/resources/user_guide.html` — new "Dashboard" and "Saved
       views" sections.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `FEATURE_GUIDE.md` — Dashboard + saved views + persistence notes.
 
 ## Risks / open questions
 

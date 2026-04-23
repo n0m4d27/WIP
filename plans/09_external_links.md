@@ -77,6 +77,7 @@ and similar references are structured rather than buried in descriptions.
       is explicitly out of scope.
 - [ ] `tasktracker/resources/user_guide.html` — "External links" section.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — external links feature and constraints.
 
 ## Risks / open questions
 

@@ -85,6 +85,7 @@ py -3.11 -m pytest tests -v --tb=short
 
 - `app_overview.md` - product goals and workflow baseline.
 - `features.md` - MVP and post-MVP feature scope.
+- `FEATURE_GUIDE.md` - catalog of shipped features (UI surfaces, persistence); update when behavior changes.
 - `tech_decisions.md` - architecture and implementation decisions.
 - `questions.md` - resolved and open product questions.
 - `todo.md` - phased implementation checklist.

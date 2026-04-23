@@ -71,7 +71,7 @@ ul { padding-left: 1.2em; }
 <ul>
 <li><b>New Task</b> (title, received, due), <b>Save Task</b> (persist the detail form), <b>Close Task</b> (close + on-close recurrence if configured) — toolbar, <b>Task actions</b> row at the top of the detail pane, and shortcuts (defaults Ctrl+N, Ctrl+S, Ctrl+Shift+C; change under Settings).</li>
 <li><b>Two-column detail layout</b> — the core fields are split for readability: the <i>left</i> column (wider) holds Ticket, Title, a combined Status / Impact / Urgency / Priority row, and Description (which grows to fill available height); the <i>right</i> column holds Received, Due, Closed, Category, Sub-category, Area, For person, and Next milestone.</li>
-<li><b>Inline sections vs. tabs</b> — below the core fields, <b>Todos</b>, <b>Blockers</b>, and <b>Recurring</b> stay visible inline as stacked group boxes; <b>Notes</b> and <b>Activity</b> share a tab strip that fills the remaining vertical space, so long histories or rich notes no longer push everything else off-screen. You can reorder both groups under <b>Settings → Customize task panel layout…</b>.</li>
+<li><b>Inline sections vs. tabs</b> — below the core fields, <b>Todos</b>, <b>Blockers</b>, <b>Recurring</b>, and <b>Attachments</b> stay visible inline as stacked group boxes by default; <b>Notes</b> and <b>Activity</b> share a tab strip that fills the remaining vertical space, so long histories or rich notes no longer push everything else off-screen. You can reorder both groups under <b>Settings → Customize task panel layout…</b>.</li>
 <li><b>Blank dates</b> — Due and Closed date boxes stay blank until you set them; use the <b>Today</b> button to fill with today's date or <b>Clear</b> to empty them again. A blank date saves as "no date" (it does not default to today).</li>
 <li><b>Category / Sub-category / Area</b> — choose vault-specific taxonomy values for each task (Area is the task-level assignment; category/sub-category reflect that hierarchy).</li>
 <li><b>For person</b> — optional attribution for who the task is for (first name, last name, employee ID).</li>
@@ -103,6 +103,18 @@ ul { padding-left: 1.2em; }
 <li>Enable on a task; choose <b>on close</b> vs <b>scheduled</b> (scheduled generation is stored for later automation).</li>
 <li>Template lines: <code>Title|days_after_received</code> per line for todos on the next instance.</li>
 <li>Weekend/holiday skips use <b>Holidays</b> tab and rule checkboxes.</li>
+</ul>
+
+<h2>Attachments</h2>
+<ul>
+<li><b>Where</b> — the <b>Attachments</b> section on the <b>Tasks</b> tab (inline with Todos / Blockers / Recurring by default; reorder under <b>Settings → Customize task panel layout…</b>).</li>
+<li><b>Add</b> — <b>Add files…</b> (multi-select) or drag files from Explorer onto the section. Files are copied into <code>attachments/&lt;task id&gt;/</code> inside the vault. You need a saved task; template drafts must be saved first.</li>
+<li><b>Large files</b> — above about 100&nbsp;MB you get a warning and can still confirm the add.</li>
+<li><b>Open</b> — copies the file to a private temp folder and launches it with the system default application (PDF, image, etc.). Nothing is rendered inside Task Tracker.</li>
+<li><b>Rename</b> — changes the <i>display</i> name only (the stored file keeps its content hash-based name).</li>
+<li><b>Remove</b> — deletes the database row and the file on disk.</li>
+<li><b>Deleting the task</b> — removing a task deletes its attachment folder for that task.</li>
+<li><b>At rest</b> — while the app is closed, attachment files are encrypted the same way as the database (each plaintext file becomes a sibling <code>.enc</code> file). While the vault is open, plaintext files exist under <code>attachments/</code> so the app can read them quickly.</li>
 </ul>
 
 <h2>Calendar</h2>
@@ -161,7 +173,7 @@ ul { padding-left: 1.2em; }
 
 <h2>Data &amp; security</h2>
 <ul>
-<li>Data folder: <code>app_data</code> next to the project (or <code>TASKTRACKER_DATA</code>). Contains <code>auth.json</code>, encrypted DB at rest (<code>tasks.db.enc</code>), and plaintext DB only while running.</li>
+<li>Data folder: each <b>vault</b> folder (or <code>TASKTRACKER_DATA</code> when set). Contains <code>auth.json</code>, encrypted DB at rest (<code>tasks.db.enc</code>), plaintext <code>tasks.db</code> only while running, and an <code>attachments/</code> tree that is plaintext while unlocked and encrypted (per-file <code>.enc</code> siblings) when the app closes.</li>
 <li>Master password on launch; backup <code>app_data</code> safely.</li>
 </ul>
 
@@ -200,7 +212,11 @@ ul { padding-left: 1.2em; }
 
 <h2>Settings</h2>
 <ul>
-<li><b>Customize task panel layout…</b> — reorder the sections below the core task fields. The dialog has two independently-reorderable groups: <b>Inline sections</b> (Todos, Blockers, Recurring — always visible) and <b>Tabs</b> (Notes, Activity — share a tab strip). Saved per vault in <code>ui_settings.json</code>.</li>
+<li><b>Customize task panel layout…</b> — reorder the sections below the core task fields. The dialog has two independently-reorderable groups: <b>Inline sections</b> (Todos, Blockers, Recurring, Attachments — stacked below the core fields) and <b>Tabs</b> (Notes, Activity — share a tab strip). Saved per vault in <code>ui_settings.json</code>.</li>
+<li><b>Display timezone…</b> — IANA zone or <b>local</b> for timestamps in activity-style surfaces.</li>
+<li><b>Text size…</b> — interface scale multiplier.</li>
+<li><b>Task templates…</b> — manage reusable new-task shapes (see <b>Task templates</b> above).</li>
+<li><b>Switch vault…</b> — relaunch into the vault picker.</li>
 <li><b>Keyboard shortcuts…</b> — change shortcuts for New Task, Save Task, and Close Task.</li>
 <li><b>Date format…</b> — choose how dates are displayed throughout the app. Presets include ISO <code>yyyy-MM-dd</code> (default), US <code>MM/dd/yyyy</code>, EU <code>dd/MM/yyyy</code>, short (<code>17 Apr 2026</code>), US long (<code>Apr 17, 2026</code>), and long (<code>17 April 2026</code>). A <b>Custom…</b> option accepts any Qt pattern (tokens: <code>yyyy</code>/<code>yy</code> year, <code>MM</code> month number, <code>MMM</code>/<code>MMMM</code> month name, <code>dd</code>/<code>d</code> day, <code>ddd</code>/<code>dddd</code> weekday); the dialog shows a live preview against today. The format affects date pickers, the Reports table + summary, the Tasks list, status-bar confirmations, milestone and Holidays displays, and the bulk-shift preview. <b>CSV and Excel exports always stay ISO <code>yyyy-MM-dd</code></b> regardless of this setting, so spreadsheets sort dates correctly.</li>
 <li><b>Manage categories and people…</b> — maintain vault-specific Category → Sub-category → Area values and people attribution entries.</li>

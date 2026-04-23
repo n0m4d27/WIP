@@ -95,6 +95,7 @@ None. Drafts are JSON files alongside `ui_settings.json`.
 - [ ] `tasktracker/resources/user_guide.html` — brief "Auto-save and
       recovery" section.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — auto-save / recovery behavior.
 
 ## Risks / open questions
 

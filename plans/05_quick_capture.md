@@ -94,6 +94,7 @@ fields.
       tray lifecycle semantics.
 - [ ] `tasktracker/resources/user_guide.html` — new "Quick capture" section.
 - [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [ ] `FEATURE_GUIDE.md` — quick capture entry points and behavior.
 
 ## Risks / open questions
 

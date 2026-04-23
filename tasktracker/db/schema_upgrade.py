@@ -129,6 +129,25 @@ def upgrade_schema(engine: Engine) -> None:
                 "ON task_template_todos(template_id)"
             )
         )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS task_attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    display_name VARCHAR(500) NOT NULL,
+                    storage_relpath VARCHAR(1024) NOT NULL,
+                    content_sha256 VARCHAR(64) NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    mime_hint VARCHAR(200),
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_task_attachments_task_id ON task_attachments(task_id)")
+        )
 
     Session = sessionmaker(bind=engine, expire_on_commit=True, future=True)
     with Session() as session:

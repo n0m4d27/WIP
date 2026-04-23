@@ -70,42 +70,43 @@ database.
 
 ## Work breakdown
 
-- [ ] Model + upgrade step.
-- [ ] Storage layout helpers (path builder, collision handling, sha check).
-- [ ] Service methods: `add_attachment(task_id, source_path) -> TaskAttachment`,
+- [x] Model + upgrade step.
+- [x] Storage layout helpers (path builder, collision handling, sha check).
+- [x] Service methods: `add_attachment(task_id, source_path) -> TaskAttachment`,
       `remove_attachment(id)`, `materialize_for_open(id) -> Path`.
-- [ ] Decide encryption granularity (per-file vs folder-tar). Implement and
+- [x] Decide encryption granularity (per-file vs folder-tar). Implement and
       unit-test the round-trip.
-- [ ] Wire vault startup to decrypt attachments alongside the DB.
-- [ ] Wire vault shutdown to re-encrypt attachments alongside the DB.
-- [ ] Attachments panel widget (list, drag-drop, Add / Remove / Open).
-- [ ] Integrate panel into task detail with inline-vs-tab placement respecting
+- [x] Wire vault startup to decrypt attachments alongside the DB.
+- [x] Wire vault shutdown to re-encrypt attachments alongside the DB.
+- [x] Attachments panel widget (list, drag-drop, Add / Remove / Open).
+- [x] Integrate panel into task detail with inline-vs-tab placement respecting
       `TASK_SECTION_PLACEMENT`.
-- [ ] Temp file cleanup on app exit (no stray decrypted files left on disk).
-- [ ] Tests covering add, remove, open round-trip, and crash mid-shutdown (no
+- [x] Temp file cleanup on app exit (no stray decrypted files left on disk).
+- [x] Tests covering add, remove, open round-trip, and crash mid-shutdown (no
       corruption).
 
 ## Validation checklist
 
-- [ ] Adding a 5 MB PDF, closing the vault, reopening, and opening the
+- [x] Adding a 5 MB PDF, closing the vault, reopening, and opening the
       attachment yields the same bytes (sha check).
-- [ ] Removing an attachment deletes both the DB row and the on-disk file.
-- [ ] Deleting a task cascades to its attachments (rows and files).
-- [ ] An attachment stored while the app was unlocked is **not** readable on
+- [x] Removing an attachment deletes both the DB row and the on-disk file.
+- [x] Deleting a task cascades to its attachments (rows and files).
+- [x] An attachment stored while the app was unlocked is **not** readable on
       disk when the vault is closed (bytes differ from plaintext).
-- [ ] App exit cleans up any decrypted temp files opened externally during
+- [x] App exit cleans up any decrypted temp files opened externally during
       the session.
-- [ ] Encrypt / decrypt flow is robust to interrupted shutdown (plan for
+- [x] Encrypt / decrypt flow is robust to interrupted shutdown (plan for
       recovery on next open).
-- [ ] Existing test suite green.
+- [x] Existing test suite green.
 
 ## Docs to update on landing
 
-- [ ] `tech_decisions.md` — encryption granularity decision, storage layout,
+- [x] `tech_decisions.md` — encryption granularity decision, storage layout,
       interaction with vault lifecycle.
-- [ ] `tasktracker/resources/user_guide.html` — new Attachments section +
+- [x] `tasktracker/resources/user_guide.html` — new Attachments section +
       note in the security / vault section.
-- [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `FEATURE_GUIDE.md` — attachments capability, storage, UI entry points.
 
 ## Risks / open questions
 

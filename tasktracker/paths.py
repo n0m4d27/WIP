@@ -5,6 +5,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+ATTACHMENTS_DIRNAME = "attachments"
+
+
+def attachments_dir(vault_root: Path) -> Path:
+    """Return ``<vault>/attachments`` (may not exist yet)."""
+    return Path(vault_root).expanduser().resolve() / ATTACHMENTS_DIRNAME
+
 
 def default_data_dir() -> Path:
     """Return default local data directory path (without creating it).

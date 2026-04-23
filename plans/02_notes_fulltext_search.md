@@ -109,6 +109,7 @@ surfaces tasks whose context lives in the notes stream.
 - [x] `tasktracker/resources/user_guide.html` — update the Search section so
       users know notes are now indexed.
 - [x] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `FEATURE_GUIDE.md` — Search + FTS / note indexing behavior.
 
 ## Risks / open questions
 

@@ -98,6 +98,7 @@ task from a template becomes a single click instead of a dozen.
 - [x] `tasktracker/resources/user_guide.html` — new "Task templates" section
       under Settings + mention in New task flow.
 - [x] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `FEATURE_GUIDE.md` — Task templates capability + tables.
 
 ## Risks / open questions
 
