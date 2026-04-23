@@ -83,6 +83,10 @@ from tasktracker.ui.keyboard_shortcuts_dialog import run_keyboard_shortcuts_dial
 from tasktracker.ui.shift_scope_dialog import ShiftScopeDialog
 from tasktracker.ui.priority_matrix_dialog import PriorityMatrixDialog
 from tasktracker.ui.reference_data_dialog import run_manage_reference_data_dialog
+from tasktracker.ui.task_template_dialog import (
+    run_manage_task_templates_dialog,
+    run_pick_task_template_dialog,
+)
 from tasktracker.ui.spin_widgets import StepInvertedSpinBox
 from tasktracker.ui.settings_store import (
     KNOWN_TAB_IDS,
@@ -187,6 +191,9 @@ class MainWindow(QMainWindow):
         self._session = session_factory()
         self._svc = TaskService(self._session)
         self._current_task_id: int | None = None
+        self._task_search_snippets: dict[int, str] = {}
+        self._new_task_draft_mode: bool = False
+        self._pending_seed_todos: list[tuple[int, str, dt.date | None]] = []
         self._loading_task_form = False
         self._ui_settings = load_ui_settings()
         # Cached result of the most recent bulk shift (preview + apply
@@ -527,6 +534,9 @@ class MainWindow(QMainWindow):
         run_manage_reference_data_dialog(self, self._svc)
         self._reload_task_taxonomy_inputs()
 
+    def _open_task_templates_dialog(self) -> None:
+        run_manage_task_templates_dialog(self, self._svc, self._ui_settings)
+
     def _export_reference_data(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -620,6 +630,9 @@ class MainWindow(QMainWindow):
         tb = QToolBar()
         self.addToolBar(tb)
         tb.addAction(self.act_new_task)
+        self.act_new_from_template = QAction("New from template…", self)
+        self.act_new_from_template.triggered.connect(self._new_task_from_template)
+        tb.addAction(self.act_new_from_template)
         tb.addAction(self.act_save_task)
         tb.addAction(self.act_close_task)
         act_matrix = QAction("Priority matrix…", self)
@@ -669,6 +682,8 @@ class MainWindow(QMainWindow):
         m_settings.addAction("Manage categories and people…", self._open_reference_data_manager)
         m_settings.addAction("Export categories and people…", self._export_reference_data)
         m_settings.addAction("Import categories and people…", self._import_reference_data)
+        m_settings.addSeparator()
+        m_settings.addAction("Task templates…", self._open_task_templates_dialog)
         m_settings.addSeparator()
         m_settings.addAction("Switch vault…", self._switch_vault)
 
@@ -727,6 +742,12 @@ class MainWindow(QMainWindow):
         sl = QVBoxLayout(search_box)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Search…")
+        self.search_edit.setToolTip(
+            "Searches the fields you tick below. Title, Description, and Notes use "
+            "full-text search when the query is long enough; very short or "
+            "punctuation-heavy text falls back to substring match. Hover a task row "
+            "for a short excerpt when a hit comes from full-text search."
+        )
         self.search_edit.returnPressed.connect(self._reload_task_list)
         sl.addWidget(self.search_edit)
         chk_row = QHBoxLayout()
@@ -1548,11 +1569,16 @@ class MainWindow(QMainWindow):
     def _tasks_for_sidebar(self):
         include_closed = not self.chk_hide_closed.isChecked()
         q = self.search_edit.text().strip()
+        self._task_search_snippets.clear()
         if q:
             fields = self._search_field_names()
             if not fields:
                 fields = {"title"}
-            return self._svc.search_tasks(q, fields=fields, include_closed=include_closed)
+            hits = self._svc.search_tasks(q, fields=fields, include_closed=include_closed)
+            for h in hits:
+                if h.snippet:
+                    self._task_search_snippets[h.task.id] = h.snippet
+            return [h.task for h in hits]
         return self._svc.list_tasks(include_closed=include_closed)
 
     def _clear_search(self) -> None:
@@ -1814,6 +1840,7 @@ class MainWindow(QMainWindow):
 
     def _reload_task_list(self) -> None:
         saved_id = self._current_task_id
+        was_draft = self._new_task_draft_mode
         self.task_list.blockSignals(True)
         try:
             self.task_list.clear()
@@ -1825,6 +1852,12 @@ class MainWindow(QMainWindow):
                 self.task_list.addItem(f"{tk} [{pr}] {t.title} — {due} ({t.status})")
                 it = self.task_list.item(self.task_list.count() - 1)
                 it.setData(Qt.ItemDataRole.UserRole, t.id)
+                snip = self._task_search_snippets.get(t.id)
+                if snip:
+                    tip = snip.replace("**", "")
+                    it.setToolTip(tip)
+                else:
+                    it.setToolTip("")
             if saved_id is not None:
                 for i in range(self.task_list.count()):
                     it = self.task_list.item(i)
@@ -1837,12 +1870,20 @@ class MainWindow(QMainWindow):
         if cur is not None and cur.data(Qt.ItemDataRole.UserRole) is not None:
             self._current_task_id = int(cur.data(Qt.ItemDataRole.UserRole))
             self._load_task_detail()
+        elif was_draft:
+            self._current_task_id = None
+            self._refresh_priority_label()
         else:
             self._current_task_id = None
             self._blank_detail_pane()
         self._refresh_priority_label()
 
+    def _clear_task_draft(self) -> None:
+        self._new_task_draft_mode = False
+        self._pending_seed_todos.clear()
+
     def _blank_detail_pane(self) -> None:
+        self._clear_task_draft()
         self.lbl_ticket.setText("—")
         self.f_title.clear()
         self.f_description.clear()
@@ -1856,7 +1897,26 @@ class MainWindow(QMainWindow):
         self.lbl_next_ms.setText("—")
         self._reload_task_taxonomy_inputs()
 
-    def _on_task_selected(self, cur: QListWidgetItem | None, _prev: QListWidgetItem | None) -> None:
+    def _on_task_selected(
+        self, cur: QListWidgetItem | None, prev: QListWidgetItem | None
+    ) -> None:
+        if self._new_task_draft_mode and cur is not None:
+            r = QMessageBox.question(
+                self,
+                "Discard draft",
+                "Discard the unsaved task created from a template and open the selected task?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if r != QMessageBox.StandardButton.Yes:
+                self.task_list.blockSignals(True)
+                if prev is not None:
+                    self.task_list.setCurrentItem(prev)
+                else:
+                    self.task_list.clearSelection()
+                self.task_list.blockSignals(False)
+                return
+            self._clear_task_draft()
         if not cur:
             self._current_task_id = None
             self._blank_detail_pane()
@@ -1956,6 +2016,9 @@ class MainWindow(QMainWindow):
             self.f_priority_label.setText("—")
 
     def _save_task_detail(self) -> None:
+        if self._new_task_draft_mode:
+            self._save_new_task_from_template_draft()
+            return
         if self._current_task_id is None:
             self._notify("Select a task first.")
             return
@@ -2002,6 +2065,9 @@ class MainWindow(QMainWindow):
             self._notify("Task saved.")
 
     def _close_current_task(self) -> None:
+        if self._new_task_draft_mode:
+            self._notify("Save or discard the template draft before closing a task.")
+            return
         if self._current_task_id is None:
             return
         task, new_t = self._svc.close_task(self._current_task_id)
@@ -2013,6 +2079,19 @@ class MainWindow(QMainWindow):
         self._load_task_detail()
 
     def _new_task(self) -> None:
+        if self._new_task_draft_mode:
+            if (
+                QMessageBox.question(
+                    self,
+                    "Discard draft",
+                    "Discard the template draft and create a blank new task?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                != QMessageBox.StandardButton.Yes
+            ):
+                return
+            self._clear_task_draft()
         d = QDialog(self)
         d.setWindowTitle("New Task")
         form = QFormLayout(d)
@@ -2044,7 +2123,121 @@ class MainWindow(QMainWindow):
                 self.task_list.setCurrentItem(it)
                 break
 
+    def _save_new_task_from_template_draft(self) -> None:
+        if not self.f_title.text().strip():
+            self._notify("Title is required.")
+            return
+        due_py = None if qdate_is_blank(self.f_due) else _qdate_to_py(self.f_due.date())
+        st = self.f_status.currentData()
+        desc_html = self.f_description.toHtml()
+        desc_plain = self.f_description.toPlainText().strip()
+        if not desc_plain:
+            desc_html = None
+        t = self._svc.create_task(
+            title=self.f_title.text(),
+            received_date=_qdate_to_py(self.f_received.date()),
+            due_date=due_py,
+            description=desc_html,
+            status=str(st) if st else TaskStatus.OPEN,
+            impact=self.f_impact.value(),
+            urgency=self.f_urgency.value(),
+            area_id=self._combo_current_int(self.f_area),
+            person_id=self._combo_current_int(self.f_person),
+        )
+        for _sort_order, tit, ms in sorted(self._pending_seed_todos, key=lambda x: x[0]):
+            self._svc.add_todo(t.id, title=tit, milestone_date=ms)
+        self._clear_task_draft()
+        self._reload_task_list()
+        self._select_list_item_by_id(self.task_list, t.id)
+        self._load_task_detail()
+        self._notify("Task created from template.")
+
+    def _new_task_from_template(self) -> None:
+        if self._new_task_draft_mode:
+            r = QMessageBox.question(
+                self,
+                "Replace draft",
+                "Discard the current template draft and start another?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if r != QMessageBox.StandardButton.Yes:
+                return
+            self._clear_task_draft()
+        if not self._svc.list_task_templates():
+            QMessageBox.information(
+                self,
+                "Task templates",
+                "No templates yet. Add them under Settings → Task templates….",
+            )
+            return
+        picked = run_pick_task_template_dialog(self, self._svc, self._ui_settings)
+        if picked is None:
+            return
+        tid, recv_date, due_date = picked
+        snap = self._svc.expand_task_template(tid, received_date=recv_date, due_date=due_date)
+        if snap is None:
+            QMessageBox.warning(self, "Task templates", "That template no longer exists.")
+            return
+        self._clear_task_draft()
+        self._new_task_draft_mode = True
+        self._pending_seed_todos = [(so, tit, ms) for tit, so, ms in snap.todos]
+        self._current_task_id = None
+        self.task_list.blockSignals(True)
+        self.task_list.clearSelection()
+        self.task_list.blockSignals(False)
+        self._tabs.setCurrentIndex(self._tab_index_tasks)
+        self.lbl_ticket.setText("(new)")
+        self.f_title.setText(snap.title)
+        self.f_description.setHtml(snap.description or "")
+        self.f_impact.setValue(snap.impact)
+        self.f_urgency.setValue(snap.urgency)
+        idx = self.f_status.findData(snap.status)
+        self.f_status.setCurrentIndex(max(0, idx))
+        self._refresh_priority_label()
+        self.f_received.setDate(_py_to_qdate(recv_date))
+        if due_date is not None:
+            self.f_due.setDate(_py_to_qdate(due_date))
+        else:
+            self.f_due.setDate(self.f_due.minimumDate())
+        self.f_closed.setDate(self.f_closed.minimumDate())
+        self._reload_task_taxonomy_inputs(None)
+        self._loading_task_form = True
+        c_id, s_id, a_id = self._svc.taxonomy_selection_for_area(snap.area_id)
+        if c_id is not None:
+            cix = self.f_category.findData(c_id)
+            self.f_category.setCurrentIndex(cix if cix >= 0 else 0)
+        self._populate_subcategory_combo(
+            self._combo_current_int(self.f_category), selected_sub_id=s_id
+        )
+        self._populate_area_combo(
+            self._combo_current_int(self.f_subcategory), selected_area_id=a_id
+        )
+        pix = self.f_person.findData(snap.person_id)
+        self.f_person.setCurrentIndex(pix if pix >= 0 else 0)
+        self._loading_task_form = False
+        self.note_list.clear()
+        self.note_editor.clear()
+        self.blocker_list.clear()
+        self.timeline.clear()
+        self.rec_enable.setChecked(False)
+        self.rec_template.clear()
+        fmt = _current_date_format_qt(self._ui_settings)
+        first_ms = None
+        for _so, _tit, ms in sorted(self._pending_seed_todos, key=lambda x: x[0]):
+            if ms is not None:
+                first_ms = ms
+                break
+        self.lbl_next_ms.setText(fmt_date(first_ms, fmt) if first_ms else "—")
+        self.todo_list.clear()
+        for sort_order, tit, ms in sorted(self._pending_seed_todos, key=lambda x: x[0]):
+            ms_s = fmt_date(ms, fmt) if ms else ""
+            self.todo_list.addItem(f"{tit} [{ms_s}]")
+
     def _add_todo(self) -> None:
+        if self._new_task_draft_mode:
+            self._notify("Save the task first; you can add more todos after it exists.")
+            return
         if self._current_task_id is None:
             return
         result = run_add_todo_dialog(self)
@@ -2128,6 +2321,9 @@ class MainWindow(QMainWindow):
         self.note_editor.setReadOnly(bool(is_sys))
 
     def _new_note(self) -> None:
+        if self._new_task_draft_mode:
+            self._notify("Save the task first, then add notes.")
+            return
         if self._current_task_id is None:
             return
         created = self._svc.add_note(self._current_task_id, body_html="<p></p>", is_system=False)
@@ -2150,6 +2346,9 @@ class MainWindow(QMainWindow):
             self._select_list_item_by_id(self.note_list, keep_id)
 
     def _add_blocker(self) -> None:
+        if self._new_task_draft_mode:
+            self._notify("Save the task first, then add blockers.")
+            return
         if self._current_task_id is None:
             return
         title, ok = QInputDialog.getText(self, "Blocker", "Title:")
@@ -2176,6 +2375,9 @@ class MainWindow(QMainWindow):
             self._select_list_item_by_id(self.blocker_list, keep_id)
 
     def _save_recurrence(self) -> None:
+        if self._new_task_draft_mode:
+            self._notify("Save the task first, then configure recurrence.")
+            return
         if self._current_task_id is None:
             return
         if not self.rec_enable.isChecked():

@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from tasktracker.db.models import Base
+from tasktracker.db.schema_upgrade import upgrade_schema
 from tasktracker.services.task_service import TaskService
 
 
@@ -12,6 +13,7 @@ from tasktracker.services.task_service import TaskService
 def session() -> Session:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
+    upgrade_schema(engine)
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=True, future=True)
     with SessionLocal() as s:
         yield s

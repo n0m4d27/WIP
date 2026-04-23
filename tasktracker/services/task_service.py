@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from sqlalchemy import Select, exists, func, or_, select
+from sqlalchemy import Select, exists, func, or_, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from tasktracker.db.models import (
@@ -24,11 +24,101 @@ from tasktracker.db.models import (
     TaskNoteVersion,
     TaskPerson,
     TaskSubCategory,
+    TaskTemplate,
+    TaskTemplateTodo,
     TaskUpdateLog,
     TodoItem,
 )
 from tasktracker.domain.enums import RecurrenceGenerationMode, TaskStatus
 from tasktracker.domain.priority import compute_priority, priority_display
+
+
+@dataclass(frozen=True)
+class TaskSearchHit:
+    task: Task
+    snippet: str | None = None
+
+
+@dataclass(frozen=True)
+class TemplateApplySnapshot:
+    """Expanded fields ready to populate the new-task form (plan 03)."""
+
+    title: str
+    description: str | None
+    area_id: int | None
+    person_id: int | None
+    impact: int
+    urgency: int
+    status: str
+    todos: tuple[tuple[str, int, dt.date | None], ...]
+
+
+_TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def expand_task_template_placeholders(pattern: str | None, anchor: dt.date) -> str | None:
+    """Expand ``{today}``, ``{yyyy}``, ``{mm}``, ``{dd}``, ``{week}`` against ``anchor``."""
+    if pattern is None:
+        return None
+    iso = anchor.isoformat()
+    _y, week_no, _wd = anchor.isocalendar()
+    repl = {
+        "today": iso,
+        "yyyy": f"{anchor.year:04d}",
+        "mm": f"{anchor.month:02d}",
+        "dd": f"{anchor.day:02d}",
+        "week": str(week_no),
+    }
+
+    def _sub(m: re.Match[str]) -> str:
+        key = m.group(1).lower()
+        return repl.get(key, m.group(0))
+
+    return _TEMPLATE_PLACEHOLDER_RE.sub(_sub, pattern)
+
+
+# Fields backed by the task_search_fts virtual table (plan 02).
+_FTS_INDEXED_FIELDS: frozenset[str] = frozenset({"title", "description", "notes"})
+_FTS_TOKEN_RE = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)
+
+
+def _fts_table_exists(session: Session) -> bool:
+    return (
+        session.scalar(
+            text(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_search_fts' LIMIT 1"
+            )
+        )
+        is not None
+    )
+
+
+def _fts_eligible(needle: str) -> bool:
+    raw = needle.strip()
+    if len(raw) < 2:
+        return False
+    tokens = [t.lower() for t in _FTS_TOKEN_RE.findall(raw)]
+    if not tokens:
+        return False
+
+    def _ok(tok: str) -> bool:
+        if len(tok) >= 2:
+            return True
+        return tok.isdigit() and len(tok) >= 2
+
+    return all(_ok(t) for t in tokens)
+
+
+def _fts_match_expression(fts_fields: set[str], raw: str) -> str:
+    tokens = [t.lower() for t in _FTS_TOKEN_RE.findall(raw)]
+    tokens = [t for t in tokens if len(t) >= 2 or (t.isdigit() and len(t) >= 2)]
+    col_list = " ".join(sorted(fts_fields))
+
+    def esc(tok: str) -> str:
+        return '"' + tok.replace('"', '""') + '"'
+
+    inner = " AND ".join(esc(t) for t in tokens)
+    return f"{{ {col_list} }} : ({inner})"
 
 
 # Stable ordering for Dashboard cards. UI and tests import this tuple
@@ -205,6 +295,71 @@ def _to_plain_text(value: str | None) -> str:
     return text
 
 
+def _aggregate_notes_plain(session: Session, task_id: int) -> str:
+    """Concatenate latest plain-text body for each note (ordered by note creation).
+
+    Latest versions are loaded with per-note scalar queries so a just-flushed
+    ``TaskNoteVersion`` row is visible even when a cached ``TaskNote.versions``
+    collection in the identity map is stale.
+    """
+    note_ids = session.scalars(
+        select(TaskNote.id).where(TaskNote.task_id == task_id).order_by(TaskNote.created_at)
+    ).all()
+    parts: list[str] = []
+    for nid in note_ids:
+        body = session.scalar(
+            select(TaskNoteVersion.body_html)
+            .where(TaskNoteVersion.note_id == nid)
+            .order_by(TaskNoteVersion.version_seq.desc())
+            .limit(1)
+        )
+        if body:
+            plain = _to_plain_text(body)
+            if plain:
+                parts.append(plain)
+    return " ".join(parts)
+
+
+def sync_task_search_fts(session: Session, task_id: int) -> None:
+    """Upsert or delete one FTS row for ``task_id``. No-op when the FTS table is absent."""
+    if not _fts_table_exists(session):
+        return
+    conn = session.connection()
+    task = session.get(Task, task_id)
+    if task is None:
+        conn.execute(text("DELETE FROM task_search_fts WHERE rowid = :tid"), {"tid": task_id})
+        return
+    notes_plain = _aggregate_notes_plain(session, task_id)
+    title = task.title or ""
+    desc = _to_plain_text(task.description)
+    conn.execute(text("DELETE FROM task_search_fts WHERE rowid = :tid"), {"tid": task_id})
+    conn.execute(
+        text(
+            "INSERT INTO task_search_fts(rowid, task_id, title, description, notes) "
+            "VALUES (:rowid, :task_id, :title, :description, :notes)"
+        ),
+        {
+            "rowid": task_id,
+            "task_id": task_id,
+            "title": title,
+            "description": desc,
+            "notes": notes_plain,
+        },
+    )
+
+
+def sync_all_task_search_fts_if_stale(session: Session) -> None:
+    """Backfill or repair the FTS table when its row count disagrees with ``tasks``."""
+    if not _fts_table_exists(session):
+        return
+    task_n = int(session.scalar(select(func.count()).select_from(Task)) or 0)
+    fts_n = int(session.scalar(text("SELECT count(*) FROM task_search_fts")) or 0)
+    if task_n == fts_n:
+        return
+    for tid in session.scalars(select(Task.id)).all():
+        sync_task_search_fts(session, int(tid))
+
+
 def _clip(text: str, limit: int = 120) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
@@ -300,33 +455,91 @@ class TaskService:
         q = q.order_by(Task.ticket_number.is_(None), Task.ticket_number, Task.due_date.is_(None), Task.due_date, Task.priority, Task.title)
         return list(self.session.scalars(q).unique().all())
 
+    def _fts_task_ids_and_snippets(
+        self, fts_fields: set[str], raw: str
+    ) -> tuple[list[int], dict[int, str]]:
+        if not fts_fields or not _fts_eligible(raw) or not _fts_table_exists(self.session):
+            return [], {}
+        match_expr = _fts_match_expression(fts_fields, raw)
+        sql = text(
+            """
+            SELECT rowid AS task_id,
+                   snippet(task_search_fts, -1, :h0, :h1, :ellip, :ntok) AS snip
+            FROM task_search_fts
+            WHERE task_search_fts MATCH :match
+            ORDER BY rank
+            """
+        )
+        try:
+            rows = (
+                self.session.connection()
+                .execute(
+                    sql,
+                    {
+                        "match": match_expr,
+                        "h0": "**",
+                        "h1": "**",
+                        "ellip": "…",
+                        "ntok": 12,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+        except Exception:
+            return [], {}
+        ids: list[int] = []
+        snippets: dict[int, str] = {}
+        for r in rows:
+            tid = int(r["task_id"])
+            ids.append(tid)
+            sn = r["snip"]
+            if sn:
+                snippets[tid] = sn
+        return ids, snippets
+
     def search_tasks(
         self,
         needle: str,
         *,
         fields: set[str],
         include_closed: bool = True,
-    ) -> list[Task]:
+    ) -> list[TaskSearchHit]:
         raw = needle.strip()
         if not raw:
-            return self.list_tasks(include_closed=include_closed)
+            return [TaskSearchHit(t, None) for t in self.list_tasks(include_closed=include_closed)]
         pat = _like_pattern(raw)
-        conds: list = []
+        conds: list[Any] = []
+        snippet_by_id: dict[int, str] = {}
 
-        if "title" in fields:
-            conds.append(func.lower(Task.title).like(pat))
-        if "description" in fields:
-            conds.append(func.lower(Task.description).like(pat))
-        if "notes" in fields:
-            conds.append(
-                exists(
-                    select(1)
-                    .select_from(TaskNote)
-                    .join(TaskNoteVersion, TaskNoteVersion.note_id == TaskNote.id)
-                    .where(TaskNote.task_id == Task.id)
-                    .where(func.lower(TaskNoteVersion.body_html).like(pat))
+        fts_fields = fields & _FTS_INDEXED_FIELDS
+        aux_fields = fields & {"todos", "blockers", "audit"}
+        use_fts = (
+            bool(fts_fields)
+            and not aux_fields
+            and _fts_eligible(raw)
+            and _fts_table_exists(self.session)
+        )
+
+        if use_fts:
+            fts_ids, snippet_by_id = self._fts_task_ids_and_snippets(fts_fields, raw)
+            if fts_ids:
+                conds.append(Task.id.in_(fts_ids))
+        else:
+            if "title" in fields:
+                conds.append(func.lower(Task.title).like(pat))
+            if "description" in fields:
+                conds.append(func.lower(Task.description).like(pat))
+            if "notes" in fields:
+                conds.append(
+                    exists(
+                        select(1)
+                        .select_from(TaskNote)
+                        .join(TaskNoteVersion, TaskNoteVersion.note_id == TaskNote.id)
+                        .where(TaskNote.task_id == Task.id)
+                        .where(func.lower(TaskNoteVersion.body_html).like(pat))
+                    )
                 )
-            )
         if "todos" in fields:
             conds.append(
                 exists(
@@ -396,7 +609,8 @@ class TaskService:
             Task.priority,
             Task.title,
         )
-        return list(self.session.scalars(q).unique().all())
+        tasks = list(self.session.scalars(q).unique().all())
+        return [TaskSearchHit(t, snippet_by_id.get(t.id)) for t in tasks]
 
     def get_task(self, task_id: int) -> Task | None:
         # joinedload on collections duplicates parent rows; .unique() is required (SQLAlchemy 2).
@@ -412,6 +626,18 @@ class TaskService:
                 selectinload(Task.person),
             )
         ).unique().one_or_none()
+
+    def delete_task(self, task_id: int) -> bool:
+        """Remove a task and its FTS row. Returns False if the id did not exist."""
+        task = self.session.get(Task, task_id)
+        if not task:
+            return False
+        tid = task.id
+        self.session.delete(task)
+        self.session.flush()
+        sync_task_search_fts(self.session, tid)
+        self.session.commit()
+        return True
 
     def create_task(
         self,
@@ -453,6 +679,7 @@ class TaskService:
                 self.session, task.id, "for_person", None, _person_label_by_id(self.session, person_id)
             )
         refresh_next_milestone(self.session, task)
+        sync_task_search_fts(self.session, task.id)
         self.session.commit()
         self.session.refresh(task)
         return task
@@ -534,6 +761,7 @@ class TaskService:
             task.priority = new_pr
 
         refresh_next_milestone(self.session, task)
+        sync_task_search_fts(self.session, task.id)
         self.session.commit()
         self.session.refresh(task)
         return task
@@ -570,6 +798,8 @@ class TaskService:
         ):
             new_task = self._spawn_recurring_successor(task, rule)
 
+        if new_task is not None:
+            sync_task_search_fts(self.session, new_task.id)
         self.session.commit()
         self.session.refresh(task)
         if new_task:
@@ -854,6 +1084,8 @@ class TaskService:
         self.session.add(note)
         self.session.flush()
         self.session.add(TaskNoteVersion(note_id=note.id, version_seq=1, body_html=body_html))
+        self.session.flush()
+        sync_task_search_fts(self.session, task_id)
         self.session.commit()
         self.session.refresh(note)
         return note
@@ -864,6 +1096,8 @@ class TaskService:
             return
         seq = max((v.version_seq for v in note.versions), default=0) + 1
         self.session.add(TaskNoteVersion(note_id=note.id, version_seq=seq, body_html=body_html))
+        self.session.flush()
+        sync_task_search_fts(self.session, note.task_id)
         self.session.commit()
 
     def add_blocker(self, task_id: int, *, title: str, reason: str | None = None) -> TaskBlocker | None:
@@ -1533,3 +1767,358 @@ class TaskService:
             "areas": int(area_total),
             "people": len(self.list_people()),
         }
+
+    def list_task_templates(self) -> list[TaskTemplate]:
+        q = (
+            select(TaskTemplate)
+            .options(selectinload(TaskTemplate.todos))
+            .order_by(TaskTemplate.sort_order, TaskTemplate.name)
+        )
+        return list(self.session.scalars(q).unique().all())
+
+    def get_task_template(self, template_id: int) -> TaskTemplate | None:
+        return self.session.scalars(
+            select(TaskTemplate)
+            .where(TaskTemplate.id == template_id)
+            .options(selectinload(TaskTemplate.todos))
+        ).unique().one_or_none()
+
+    def create_task_template(
+        self,
+        *,
+        name: str,
+        title_pattern: str,
+        description_pattern: str | None = None,
+        default_area_id: int | None = None,
+        default_person_id: int | None = None,
+        default_impact: int = 2,
+        default_urgency: int = 2,
+        default_status: str = TaskStatus.OPEN,
+        todo_specs: list[tuple[str, int, int | None]],
+    ) -> TaskTemplate | None:
+        cleaned = name.strip()
+        if not cleaned:
+            return None
+        if self.session.scalar(select(TaskTemplate).where(TaskTemplate.name == cleaned)):
+            return None
+        mx = self.session.scalar(select(func.coalesce(func.max(TaskTemplate.sort_order), -1)))
+        sort_order = int(mx) + 1
+        tt = TaskTemplate(
+            name=cleaned,
+            title_pattern=title_pattern.strip(),
+            description_pattern=description_pattern,
+            default_area_id=default_area_id,
+            default_person_id=default_person_id,
+            default_impact=default_impact,
+            default_urgency=default_urgency,
+            default_status=default_status,
+            sort_order=sort_order,
+        )
+        self.session.add(tt)
+        self.session.flush()
+        for t_title, t_order, off in todo_specs:
+            self.session.add(
+                TaskTemplateTodo(
+                    template_id=tt.id,
+                    sort_order=t_order,
+                    title=t_title.strip(),
+                    milestone_offset_days=off,
+                )
+            )
+        self.session.commit()
+        self.session.refresh(tt)
+        return tt
+
+    def update_task_template(
+        self,
+        template_id: int,
+        *,
+        name: str | None = None,
+        title_pattern: str | None = None,
+        description_pattern: "str | None | object" = _UNSET,
+        default_area_id: "int | None | object" = _UNSET,
+        default_person_id: "int | None | object" = _UNSET,
+        default_impact: int | None = None,
+        default_urgency: int | None = None,
+        default_status: str | None = None,
+        todo_specs: list[tuple[str, int, int | None]] | None = None,
+    ) -> TaskTemplate | None:
+        tt = self.session.get(
+            TaskTemplate, template_id, options=[selectinload(TaskTemplate.todos)]
+        )
+        if not tt:
+            return None
+        if name is not None:
+            nn = name.strip()
+            if nn and nn != tt.name:
+                taken = self.session.scalar(
+                    select(TaskTemplate).where(
+                        TaskTemplate.name == nn, TaskTemplate.id != template_id
+                    )
+                )
+                if taken:
+                    return None
+                tt.name = nn
+        if title_pattern is not None:
+            tt.title_pattern = title_pattern.strip()
+        if description_pattern is not _UNSET:
+            tt.description_pattern = description_pattern  # type: ignore[assignment]
+        if default_area_id is not _UNSET:
+            tt.default_area_id = default_area_id  # type: ignore[assignment]
+        if default_person_id is not _UNSET:
+            tt.default_person_id = default_person_id  # type: ignore[assignment]
+        if default_impact is not None:
+            tt.default_impact = default_impact
+        if default_urgency is not None:
+            tt.default_urgency = default_urgency
+        if default_status is not None:
+            tt.default_status = default_status
+        if todo_specs is not None:
+            for old in list(tt.todos):
+                self.session.delete(old)
+            self.session.flush()
+            for t_title, t_order, off in todo_specs:
+                self.session.add(
+                    TaskTemplateTodo(
+                        template_id=tt.id,
+                        sort_order=t_order,
+                        title=t_title.strip(),
+                        milestone_offset_days=off,
+                    )
+                )
+        self.session.commit()
+        self.session.refresh(tt)
+        return tt
+
+    def delete_task_template(self, template_id: int) -> None:
+        tt = self.session.get(TaskTemplate, template_id)
+        if tt:
+            self.session.delete(tt)
+            self.session.commit()
+
+    def move_task_template(self, template_id: int, delta: int) -> None:
+        rows = list(
+            self.session.scalars(
+                select(TaskTemplate).order_by(TaskTemplate.sort_order, TaskTemplate.name)
+            ).all()
+        )
+        idx = next((i for i, r in enumerate(rows) if r.id == template_id), None)
+        if idx is None or delta == 0:
+            return
+        j = idx + delta
+        if j < 0 or j >= len(rows):
+            return
+        rows[idx], rows[j] = rows[j], rows[idx]
+        for i, r in enumerate(rows):
+            r.sort_order = i
+        self.session.commit()
+
+    def expand_task_template(
+        self,
+        template_id: int,
+        *,
+        received_date: dt.date,
+        due_date: dt.date | None = None,
+    ) -> TemplateApplySnapshot | None:
+        _ = due_date  # reserved for future pattern tokens tied to due date
+        tt = self.session.scalars(
+            select(TaskTemplate)
+            .where(TaskTemplate.id == template_id)
+            .options(selectinload(TaskTemplate.todos))
+        ).unique().one_or_none()
+        if not tt:
+            return None
+        holidays = _holidays_set(self.session)
+        title_raw = expand_task_template_placeholders(tt.title_pattern, received_date) or ""
+        title = title_raw.strip()
+        desc_raw = expand_task_template_placeholders(tt.description_pattern, received_date)
+        description: str | None
+        if desc_raw is None or not str(desc_raw).strip():
+            description = None
+        else:
+            ds = str(desc_raw).strip()
+            if ds.startswith("<") and ">" in ds:
+                description = ds
+            else:
+                description = f"<p>{html.escape(ds)}</p>"
+        area_id = tt.default_area_id
+        if area_id is not None and self.session.get(TaskArea, area_id) is None:
+            area_id = None
+        person_id = tt.default_person_id
+        if person_id is not None and self.session.get(TaskPerson, person_id) is None:
+            person_id = None
+        todo_rows: list[tuple[str, int, dt.date | None]] = []
+        for td in sorted(tt.todos, key=lambda x: (x.sort_order, x.id)):
+            ms: dt.date | None = None
+            if td.milestone_offset_days is not None:
+                ms = shift_business_days(
+                    received_date,
+                    td.milestone_offset_days,
+                    holidays,
+                    skip_weekends=True,
+                    skip_holidays=True,
+                )
+            t_title = expand_task_template_placeholders(td.title, received_date) or td.title
+            todo_rows.append((t_title.strip(), td.sort_order, ms))
+        return TemplateApplySnapshot(
+            title=title,
+            description=description,
+            area_id=area_id,
+            person_id=person_id,
+            impact=tt.default_impact,
+            urgency=tt.default_urgency,
+            status=tt.default_status,
+            todos=tuple(todo_rows),
+        )
+
+    def _resolve_area_id_from_path(self, path: str | None) -> int | None:
+        if not path or not isinstance(path, str):
+            return None
+        parts = [p.strip() for p in path.split("/") if p.strip()]
+        if len(parts) != 3:
+            return None
+        cat_n, sub_n, area_n = parts[0], parts[1], parts[2]
+        for cat in self.list_categories():
+            if cat.name != cat_n:
+                continue
+            for sub in cat.subcategories:
+                if sub.name != sub_n:
+                    continue
+                for area in sub.areas:
+                    if area.name == area_n:
+                        return area.id
+        return None
+
+    def export_task_templates(self, path: Path) -> None:
+        payload: dict[str, Any] = {"version": 1, "templates": []}
+        for tt in self.list_task_templates():
+            area_path = _area_label_by_id(self.session, tt.default_area_id)
+            emp: str | None = None
+            if tt.default_person_id is not None:
+                p = self.session.get(TaskPerson, tt.default_person_id)
+                if p:
+                    emp = p.employee_id
+            payload["templates"].append(
+                {
+                    "name": tt.name,
+                    "title_pattern": tt.title_pattern,
+                    "description_pattern": tt.description_pattern,
+                    "default_impact": tt.default_impact,
+                    "default_urgency": tt.default_urgency,
+                    "default_status": tt.default_status,
+                    "sort_order": tt.sort_order,
+                    "area_path": area_path,
+                    "person_employee_id": emp,
+                    "todos": [
+                        {
+                            "title": x.title,
+                            "sort_order": x.sort_order,
+                            "milestone_offset_days": x.milestone_offset_days,
+                        }
+                        for x in sorted(tt.todos, key=lambda z: (z.sort_order, z.id))
+                    ],
+                }
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def import_task_templates(self, path: Path) -> dict[str, int]:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("Invalid JSON root")
+        templates = raw.get("templates", [])
+        if not isinstance(templates, list):
+            raise ValueError("Invalid templates array")
+        created = 0
+        updated = 0
+        for ent in templates:
+            if not isinstance(ent, dict):
+                continue
+            name = str(ent.get("name", "")).strip()
+            if not name:
+                continue
+            area_id = self._resolve_area_id_from_path(
+                ent.get("area_path") if isinstance(ent.get("area_path"), str) else None
+            )
+            person_id: int | None = None
+            emp = ent.get("person_employee_id")
+            if emp is not None and str(emp).strip():
+                p = self.session.scalar(
+                    select(TaskPerson).where(TaskPerson.employee_id == str(emp).strip())
+                )
+                if p:
+                    person_id = p.id
+            todo_specs: list[tuple[str, int, int | None]] = []
+            raw_todos = ent.get("todos", [])
+            if isinstance(raw_todos, list):
+                for i, row in enumerate(raw_todos):
+                    if not isinstance(row, dict):
+                        continue
+                    t_title = str(row.get("title", "")).strip()
+                    if not t_title:
+                        continue
+                    t_order = int(row.get("sort_order", i))
+                    off_raw = row.get("milestone_offset_days")
+                    if off_raw is None or (isinstance(off_raw, str) and not str(off_raw).strip()):
+                        off_i: int | None = None
+                    else:
+                        off_i = int(off_raw)
+                    todo_specs.append((t_title, t_order, off_i))
+            title_pattern = str(ent.get("title_pattern", "")).strip()
+            if not title_pattern:
+                continue
+            desc_raw = ent.get("description_pattern")
+            desc_s = str(desc_raw) if desc_raw is not None else None
+            impact = int(ent.get("default_impact", 2))
+            urgency = int(ent.get("default_urgency", 2))
+            status = str(ent.get("default_status", TaskStatus.OPEN))
+            existing = self.session.scalar(select(TaskTemplate).where(TaskTemplate.name == name))
+            if existing:
+                upd = self.update_task_template(
+                    existing.id,
+                    name=name,
+                    title_pattern=title_pattern,
+                    description_pattern=desc_s,
+                    default_area_id=area_id,
+                    default_person_id=person_id,
+                    default_impact=impact,
+                    default_urgency=urgency,
+                    default_status=status,
+                    todo_specs=todo_specs,
+                )
+                if upd is not None:
+                    updated += 1
+            else:
+                c = self.create_task_template(
+                    name=name,
+                    title_pattern=title_pattern,
+                    description_pattern=desc_s,
+                    default_area_id=area_id,
+                    default_person_id=person_id,
+                    default_impact=impact,
+                    default_urgency=urgency,
+                    default_status=status,
+                    todo_specs=todo_specs,
+                )
+                if c is not None:
+                    created += 1
+        return {"created": created, "updated": updated}
+
+    def taxonomy_selection_for_area(
+        self, area_id: int | None
+    ) -> tuple[int | None, int | None, int | None]:
+        """Return ``(category_id, subcategory_id, area_id)`` for taxonomy combos, or Nones."""
+        if area_id is None:
+            return None, None, None
+        area = self.session.get(
+            TaskArea,
+            area_id,
+            options=[
+                joinedload(TaskArea.subcategory).joinedload(TaskSubCategory.category),
+            ],
+        )
+        if area is None:
+            return None, None, None
+        sub = area.subcategory
+        cat = sub.category
+        return cat.id, sub.id, area.id

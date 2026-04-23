@@ -46,6 +46,27 @@ ul { padding-left: 1.2em; }
 <li><b>Last-applied view is not auto-restored</b> on startup — by design, so yesterday's filters can't quietly hide today's new work. Apply the view you want whenever you need it.</li>
 </ul>
 
+<h2>Task templates</h2>
+<ul>
+<li><b>What they are</b> — saved <i>shapes</i> for tasks you create often: a name, title and description <b>patterns</b> (with small placeholders), optional default area and for-person, impact / urgency / status, and optional seed <b>todos</b> with business-day milestone offsets from the task's <b>received</b> date.</li>
+<li><b>Not the same as recurrence</b> — <b>Recurring</b> on a task spawns the next instance when that task closes (or on a schedule). Templates are for <i>starting a fresh task</i> that looks like a known checklist, any time you want.</li>
+<li><b>Manage</b> — <b>Settings → Task templates…</b>. Add, edit, remove, move up/down, and <b>Save template</b> to persist. <b>Export JSON…</b> / <b>Import JSON…</b> round-trip templates between vaults; re-importing the same <b>name</b> updates the existing template instead of duplicating.</li>
+<li><b>Placeholders</b> — in title, description, and todo lines you can use <code>{today}</code>, <code>{yyyy}</code>, <code>{mm}</code>, <code>{dd}</code>, and <code>{week}</code> (ISO week). They expand from the <b>Received</b> date you pick when applying the template.</li>
+<li><b>Todo lines</b> — one per line in the editor. Optional <code>Title|N</code> adds a milestone <code>N</code> business days after received (skipping weekends and configured holidays), same idea as recurring todo templates.</li>
+<li><b>New from template</b> — toolbar <b>New from template…</b> (next to New Task). Pick a template, set <b>Received</b> and optional <b>Due</b>, then the <b>Tasks</b> tab opens with the detail pane filled but <i>not saved yet</i>. Adjust anything, then <b>Save Task</b> to create the row and seed todos. Until you save, todos/notes/blockers/recurrence actions stay disabled so nothing hits the database early.</li>
+<li><b>If the default area was deleted</b> — applying the template simply leaves area (or person) unset; the app does not crash.</li>
+</ul>
+
+<h2>Search</h2>
+<ul>
+<li><b>Where</b> — the <b>Search</b> box at the top of the <b>Tasks</b> tab (above the saved-views panel). Tick which fields to include: <b>Title</b>, <b>Description</b>, <b>Notes</b>, <b>Todos</b>, <b>Blockers</b>, <b>Audit</b>, or <b>Ticket</b> (e.g. <code>T12</code> or <code>12</code>).</li>
+<li><b>Notes and rich text</b> — <b>Title</b>, <b>Description</b>, and <b>Notes</b> are indexed with <b>full-text search</b> (SQLite FTS5). Note content is indexed as <i>plain text</i> after stripping HTML, so you can find words that appear inside formatted notes, not only in the raw tags.</li>
+<li><b>When it uses full-text vs substring</b> — if you search only among Title / Description / Notes (no Todos, Blockers, or Audit checked) and type a query long enough to form real search tokens, the app uses full-text matching. Very short queries (for example a single character) use substring (<code>LIKE</code>) matching instead so they still work.</li>
+<li><b>Mixed field sets</b> — if <b>Todos</b>, <b>Blockers</b>, or <b>Audit</b> is checked, Title / Description / Notes use the same substring-style path as those fields so one search can combine them in a single result list.</li>
+<li><b>Match excerpts</b> — when a hit comes from full-text search, hover the task row in the list to see a short excerpt showing why it matched (highlights appear as plain <code>**</code> markers in the tooltip).</li>
+<li><b>Startup / upgrades</b> — the index is created automatically when the vault database is upgraded; new or edited tasks and notes update the index as you save.</li>
+</ul>
+
 <h2>Tasks</h2>
 <ul>
 <li><b>New Task</b> (title, received, due), <b>Save Task</b> (persist the detail form), <b>Close Task</b> (close + on-close recurrence if configured) — toolbar, <b>Task actions</b> row at the top of the detail pane, and shortcuts (defaults Ctrl+N, Ctrl+S, Ctrl+Shift+C; change under Settings).</li>

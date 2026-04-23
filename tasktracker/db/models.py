@@ -239,6 +239,55 @@ class RecurringTodoTemplate(Base):
     rule: Mapped["RecurringRule"] = relationship(back_populates="todo_templates")
 
 
+class TaskTemplate(Base):
+    """Reusable one-off task shape (plan 03); distinct from per-task ``RecurringRule``."""
+
+    __tablename__ = "task_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True, index=True)
+    title_pattern: Mapped[str] = mapped_column(String(500), nullable=False)
+    description_pattern: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_area_id: Mapped[int | None] = mapped_column(
+        ForeignKey("task_areas.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    default_person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("task_people.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    default_impact: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    default_urgency: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    default_status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    todos: Mapped[list["TaskTemplateTodo"]] = relationship(
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="TaskTemplateTodo.sort_order",
+    )
+    default_area: Mapped["TaskArea | None"] = relationship()
+    default_person: Mapped["TaskPerson | None"] = relationship()
+
+
+class TaskTemplateTodo(Base):
+    __tablename__ = "task_template_todos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    template_id: Mapped[int] = mapped_column(
+        ForeignKey("task_templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    milestone_offset_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    template: Mapped["TaskTemplate"] = relationship(back_populates="todos")
+
+
 class BusinessHoliday(Base):
     __tablename__ = "business_holidays"
 

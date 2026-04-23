@@ -7,6 +7,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from tasktracker.db.models import Task
+from tasktracker.services.task_service import sync_all_task_search_fts_if_stale
 
 
 def upgrade_schema(engine: Engine) -> None:
@@ -86,17 +87,83 @@ def upgrade_schema(engine: Engine) -> None:
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_area_id ON tasks(area_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_person_id ON tasks(person_id)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS task_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(200) NOT NULL UNIQUE,
+                    title_pattern VARCHAR(500) NOT NULL,
+                    description_pattern TEXT,
+                    default_area_id INTEGER REFERENCES task_areas(id) ON DELETE SET NULL,
+                    default_person_id INTEGER REFERENCES task_people(id) ON DELETE SET NULL,
+                    default_impact INTEGER NOT NULL DEFAULT 2,
+                    default_urgency INTEGER NOT NULL DEFAULT 2,
+                    default_status VARCHAR(32) NOT NULL DEFAULT 'open',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS task_template_todos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    template_id INTEGER NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    title VARCHAR(500) NOT NULL,
+                    milestone_offset_days INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_task_templates_sort ON task_templates(sort_order)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_task_template_todos_template_id "
+                "ON task_template_todos(template_id)"
+            )
+        )
 
     Session = sessionmaker(bind=engine, expire_on_commit=True, future=True)
     with Session() as session:
         missing = session.scalars(
             select(Task).where(Task.ticket_number.is_(None)).order_by(Task.id)
         ).all()
-        if not missing:
-            return
-        m = session.scalar(select(func.max(Task.ticket_number)))
-        n = (m + 1) if m is not None else 0
-        for t in missing:
-            t.ticket_number = n
-            n += 1
+        if missing:
+            m = session.scalar(select(func.max(Task.ticket_number)))
+            n = (m + 1) if m is not None else 0
+            for t in missing:
+                t.ticket_number = n
+                n += 1
+            session.commit()
+
+    with engine.begin() as conn:
+        fts_row = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_search_fts' LIMIT 1"
+            )
+        ).fetchone()
+        if not fts_row:
+            conn.execute(
+                text(
+                    """
+                    CREATE VIRTUAL TABLE task_search_fts USING fts5(
+                        task_id UNINDEXED,
+                        title,
+                        description,
+                        notes,
+                        tokenize = 'porter unicode61 remove_diacritics 2'
+                    )
+                    """
+                )
+            )
+
+    with Session() as session:
+        sync_all_task_search_fts_if_stale(session)
         session.commit()

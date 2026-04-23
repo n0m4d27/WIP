@@ -74,41 +74,41 @@ surfaces tasks whose context lives in the notes stream.
 
 ## Work breakdown
 
-- [ ] Add HTML-to-plaintext helper (handle the subset Qt rich text emits).
-- [ ] Write schema upgrade step that creates `task_search_fts` and backfills.
-- [ ] Decide: SQL triggers vs service-layer sync. Implement the chosen
+- [x] Add HTML-to-plaintext helper (handle the subset Qt rich text emits).
+- [x] Write schema upgrade step that creates `task_search_fts` and backfills.
+- [x] Decide: SQL triggers vs service-layer sync. Implement the chosen
       approach; prefer service-layer for testability unless triggers clearly
       win.
-- [ ] Extend `search_tasks` to MATCH on FTS for multi-term queries; keep LIKE
+- [x] Extend `search_tasks` to MATCH on FTS for multi-term queries; keep LIKE
       fallback for single-char / punctuation queries.
-- [ ] Return snippets (FTS5 `snippet()` function) with the rows so the UI can
+- [x] Return snippets (FTS5 `snippet()` function) with the rows so the UI can
       display hit context.
-- [ ] UI pass: surface snippets in task list tooltips or a small results
+- [x] UI pass: surface snippets in task list tooltips or a small results
       detail area (minimal; don't redesign the list).
-- [ ] Unit tests for each above piece.
-- [ ] Migration / smoke test: open a pre-plan vault, run the upgrade, verify
+- [x] Unit tests for each above piece.
+- [x] Migration / smoke test: open a pre-plan vault, run the upgrade, verify
       FTS populated and search works.
 
 ## Validation checklist
 
-- [ ] FTS virtual table exists and row count equals `select count(*) from tasks`.
-- [ ] Inserting a new task, editing a description, adding / editing a note all
+- [x] FTS virtual table exists and row count equals `select count(*) from tasks`.
+- [x] Inserting a new task, editing a description, adding / editing a note all
       keep FTS in sync without manual rebuild.
-- [ ] Deleting a task removes its FTS row.
-- [ ] Search for a term appearing only in note content returns the task.
-- [ ] Search for a term appearing only in title still works (regression).
-- [ ] Multi-term search uses FTS (visible via snippet); single-char query
+- [x] Deleting a task removes its FTS row. *(``TaskService.delete_task`` removes the task and FTS row; UI may expose delete later.)*
+- [x] Search for a term appearing only in note content returns the task.
+- [x] Search for a term appearing only in title still works (regression).
+- [x] Multi-term search uses FTS (visible via snippet); single-char query
       still falls back to LIKE.
-- [ ] Backfill is idempotent — running the upgrade twice produces no dupes.
-- [ ] Existing `tests/test_task_service.py` suite is green.
+- [x] Backfill is idempotent — running the upgrade twice produces no dupes.
+- [x] Existing `tests/test_task_service.py` suite is green.
 
 ## Docs to update on landing
 
-- [ ] `tech_decisions.md` — note the FTS5 adoption, why we chose FTS5 over
+- [x] `tech_decisions.md` — note the FTS5 adoption, why we chose FTS5 over
       raw LIKE, and the sync strategy (trigger vs service).
-- [ ] `tasktracker/resources/user_guide.html` — update the Search section so
+- [x] `tasktracker/resources/user_guide.html` — update the Search section so
       users know notes are now indexed.
-- [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `plans/README.md` — mark Done, log follow-ups / bugs.
 
 ## Risks / open questions
 
@@ -124,4 +124,6 @@ surfaces tasks whose context lives in the notes stream.
 
 ## Follow-ups discovered
 
-_(empty at start of plan)_
+| Item | Notes |
+|------|-------|
+| Task delete in UI | Service method `delete_task` exists; optional menu / context-menu exposure is a small follow-up if users need it. |

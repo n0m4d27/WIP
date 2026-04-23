@@ -67,37 +67,37 @@ task from a template becomes a single click instead of a dozen.
 
 ## Work breakdown
 
-- [ ] Define models + upgrade step.
-- [ ] Implement service methods (CRUD + apply).
-- [ ] Build Task templates dialog (list, add, edit, delete, reorder, import,
+- [x] Define models + upgrade step.
+- [x] Implement service methods (CRUD + apply).
+- [x] Build Task templates dialog (list, add, edit, delete, reorder, import,
       export).
-- [ ] Add "New task from template..." action with a simple picker.
-- [ ] Placeholder expansion for title pattern (`{today}`, `{yyyy}`, `{mm}`,
-      `{week}`) — keep the list tiny; expand later if needed.
-- [ ] Business-day offset support for todos (reuse `shift_business_days`).
-- [ ] JSON export / import using the existing reference-data pattern.
-- [ ] Tests: CRUD, apply produces expected task shape, placeholders expand,
+- [x] Add "New task from template..." action with a simple picker.
+- [x] Placeholder expansion for title pattern (`{today}`, `{yyyy}`, `{mm}`,
+      `{dd}`, `{week}`) — keep the list tiny; expand later if needed.
+- [x] Business-day offset support for todos (reuse `shift_business_days`).
+- [x] JSON export / import using the existing reference-data pattern.
+- [x] Tests: CRUD, apply produces expected task shape, placeholders expand,
       JSON round-trip, corrupt import handled gracefully.
 
 ## Validation checklist
 
-- [ ] Creating a template with two todos and applying it yields one task + two
+- [x] Creating a template with two todos and applying it yields one task + two
       todos with correct sort order and milestone dates.
-- [ ] Deleting the default area or person on a template safely nulls the
+- [x] Deleting the default area or person on a template safely nulls the
       reference (no crash when applying).
-- [ ] Placeholders expand against the task's received date, not literal
+- [x] Placeholders expand against the task's received date, not literal
       strings.
-- [ ] JSON import is idempotent (re-import of the same file does not duplicate
+- [x] JSON import is idempotent (re-import of the same file does not duplicate
       templates; matches by `name`).
-- [ ] Existing test suite green.
+- [x] Existing test suite green.
 
 ## Docs to update on landing
 
-- [ ] `tech_decisions.md` — note the template model, placeholder grammar, and
+- [x] `tech_decisions.md` — note the template model, placeholder grammar, and
       how it differs from `RecurringRule`.
-- [ ] `tasktracker/resources/user_guide.html` — new "Task templates" section
+- [x] `tasktracker/resources/user_guide.html` — new "Task templates" section
       under Settings + mention in New task flow.
-- [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `plans/README.md` — mark Done, log follow-ups / bugs.
 
 ## Risks / open questions
 

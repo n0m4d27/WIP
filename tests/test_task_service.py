@@ -83,13 +83,13 @@ def test_search_title_notes_and_ticket(svc: TaskService) -> None:
     svc.add_note(b.id, body_html="<p>Investigate VLAN edge case</p>")
 
     by_title = svc.search_tasks("outage", fields={"title"})
-    assert [t.id for t in by_title] == [a.id]
+    assert [h.task.id for h in by_title] == [a.id]
 
     by_note = svc.search_tasks("vlan", fields={"notes"})
-    assert [t.id for t in by_note] == [b.id]
+    assert [h.task.id for h in by_note] == [b.id]
 
     by_ticket_prefixed = svc.search_tasks("T1", fields={"ticket"})
-    assert [t.id for t in by_ticket_prefixed] == [b.id]
+    assert [h.task.id for h in by_ticket_prefixed] == [b.id]
 
 
 def test_task_area_and_person_assignment(svc: TaskService) -> None:
