@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Final
 
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -15,6 +16,13 @@ from PySide6.QtWidgets import (
 )
 
 
+def _bootstrap_dialog_phase() -> None:
+    """While only bootstrap dialogs are visible, never quit the app when one closes."""
+    inst = QApplication.instance()
+    if inst is not None:
+        inst.setQuitOnLastWindowClosed(False)
+
+
 # Sentinel object returned by :func:`run_login_dialog` when the user
 # clicks "Switch vault…". Caller compares by identity (``is``) and
 # relaunches the app with ``--pick-vault`` instead of attempting to
@@ -24,6 +32,7 @@ SWITCH_VAULT_REQUESTED: Final[object] = object()
 
 def run_setup_password_dialog(parent=None) -> str | None:
     """Return new password or None if cancelled."""
+    _bootstrap_dialog_phase()
     d = QDialog(parent)
     d.setWindowTitle("Set master password")
     d.setMinimumWidth(360)
@@ -80,6 +89,7 @@ def run_login_dialog(parent=None, *, vault_path: str | None = None):
     ``vault_path`` is shown as an informational hint so the user knows
     which vault they're about to unlock.
     """
+    _bootstrap_dialog_phase()
     d = QDialog(parent)
     d.setWindowTitle("Unlock Task Tracker")
     d.setMinimumWidth(360)

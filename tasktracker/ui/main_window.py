@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+from typing import Any
 import datetime as dt
 import html as htmllib
 import json
@@ -208,6 +209,7 @@ class MainWindow(QMainWindow):
         # entry when this is ``None`` and overwrites it on each new
         # apply.
         self._last_bulk_shift: ShiftResult | None = None
+        self._quick_capture_integration: Any | None = None
 
         self._create_task_actions()
         self._build_ui()
@@ -316,13 +318,21 @@ class MainWindow(QMainWindow):
         save_ui_settings(self._ui_settings)
         self._apply_task_section_order(self._ui_settings["task_panel_section_order"])
 
+    def set_quick_capture_integration(self, integration: Any | None) -> None:
+        self._quick_capture_integration = integration
+
+    def _apply_quick_capture_tray_policy(self) -> None:
+        integ = self._quick_capture_integration
+        if integ is not None:
+            integ.apply_quit_policy()
+            integ.reregister_hotkey()
+
     def _open_keyboard_shortcuts(self) -> None:
-        new_sc = run_keyboard_shortcuts_dialog(self, self._ui_settings.get("shortcuts", {}))
-        if new_sc is None:
+        if not run_keyboard_shortcuts_dialog(self, self._ui_settings, self._svc):
             return
-        self._ui_settings["shortcuts"] = new_sc
         save_ui_settings(self._ui_settings)
         self._apply_task_action_shortcuts()
+        self._apply_quick_capture_tray_policy()
 
     def _build_theme_menu(self, view_menu: QMenu) -> None:
         """Populate the View menu with a radio group of theme choices.
@@ -610,14 +620,9 @@ class MainWindow(QMainWindow):
 
         def relaunch_and_quit() -> None:
             try:
-                self._session.close()
+                self.finalize_application_shutdown()
             except Exception:  # pragma: no cover - defensive
                 pass
-            if self._secure_shutdown is not None:
-                try:
-                    self._secure_shutdown()
-                except Exception:  # pragma: no cover - defensive
-                    pass
             if getattr(sys, "frozen", False):
                 cmd = [sys.executable, "--pick-vault"]
             else:
@@ -2578,6 +2583,13 @@ class MainWindow(QMainWindow):
         else:
             self._notify("Task saved.")
 
+    def open_task_on_tasks_tab(self, task_id: int) -> None:
+        """Show the main window and select ``task_id`` on the Tasks tab."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._jump_to_task_in_tasks_tab(task_id)
+
     def _jump_to_task_in_tasks_tab(self, task_id: int) -> None:
         """Switch the central tab widget to the Tasks tab and highlight
         ``task_id`` in the task list. No-op (with a status notification)
@@ -2781,7 +2793,10 @@ class MainWindow(QMainWindow):
         self.act_undo_bulk_shift.setEnabled(True)
         self.act_undo_bulk_shift.setToolTip(result.describe())
 
-    def closeEvent(self, event) -> None:  # type: ignore[override]
+    def finalize_application_shutdown(self) -> None:
+        integ = self._quick_capture_integration
+        if integ is not None:
+            integ.cleanup_before_quit()
         self._session.close()
         if self._secure_shutdown is not None:
             self._secure_shutdown()
@@ -2789,4 +2804,12 @@ class MainWindow(QMainWindow):
             shutil.rmtree(self._attach_open_temp, ignore_errors=True)
         except Exception:
             pass
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        integ = self._quick_capture_integration
+        if integ is not None and integ.keep_tray_alive():
+            event.ignore()
+            self.hide()
+            return
+        self.finalize_application_shutdown()
         super().closeEvent(event)

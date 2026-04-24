@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tasktracker import launcher_settings as ls
@@ -26,6 +27,7 @@ from tasktracker.ui.auth_dialogs import (
     run_setup_password_dialog,
 )
 from tasktracker.ui.main_window import MainWindow
+from tasktracker.ui.quick_capture_integration import QuickCaptureIntegration
 from tasktracker.ui.settings_store import get_theme_id, get_ui_text_scale, load_ui_settings
 from tasktracker.ui.themes import apply_theme
 from tasktracker.ui.text_scale import apply_app_text_scale, ensure_text_scale_baseline
@@ -92,6 +94,13 @@ def main() -> None:
     args, _ = parser.parse_known_args()
 
     app = QApplication(sys.argv)
+    # Vault picker, setup-password, and login dialogs run before the main
+    # window exists. With the default ``quitOnLastWindowClosed`` (True),
+    # closing the login dialog (last top-level window) queues ``quit()`` while
+    # still inside ``dialog.exec()``, so the later ``app.exec()`` exits
+    # immediately after ``MainWindow.show()``. Keep the app alive until the
+    # real quit policy is applied once the main window is visible.
+    app.setQuitOnLastWindowClosed(False)
 
     cfg_path = ls.launcher_config_path()
     launcher = ls.load(cfg_path)
@@ -188,6 +197,11 @@ def main() -> None:
     assert fernet is not None
     decrypt_attachments_folder(data_dir, fernet)
 
+    # Drain key events (e.g. Enter on the login OK button) so they are not
+    # delivered to the first-focus widget on the main window in the same
+    # tick as ``show()``.
+    app.processEvents()
+
     def secure_shutdown() -> None:
         engine.dispose()
         encrypt_attachments_folder(data_dir, fernet)
@@ -202,7 +216,16 @@ def main() -> None:
         secure_shutdown=secure_shutdown,
         startup_notice=startup_notice,
     )
-    win.show()
+
+    def _present_main_and_quick_capture() -> None:
+        # Defer past the login dialog's unwind so stray key events (Enter) and
+        # quit-on-last-window bookkeeping cannot affect the first paint.
+        win.show()
+        integration = QuickCaptureIntegration(app, win, session_factory, data_dir)
+        win.set_quick_capture_integration(integration)
+        integration.apply_quit_policy()
+
+    QTimer.singleShot(0, _present_main_and_quick_capture)
     raise SystemExit(app.exec())
 
 

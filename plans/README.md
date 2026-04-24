@@ -46,7 +46,7 @@ behavior — in the same pass as the user guide and plan checkboxes.
 | 02 | [Notes full-text search](02_notes_fulltext_search.md)              | 1    | Done        | 2026-04-23 | 2026-04-23 | FTS5 `task_search_fts`; service-layer sync; snippets in task list tooltips. |
 | 03 | [Task templates](03_task_templates.md)                             | 1    | Done        | 2026-04-23 | 2026-04-23 | Templates + JSON I/O; New from template… draft then Save; `delete_task` for FTS. |
 | 04 | [Attachments](04_attachments.md)                                   | 1    | Done        | 2026-04-23 | 2026-04-23 | Per-file Fernet `.enc` at rest; `task_attachments`; inline section + temp open. |
-| 05 | [Quick capture](05_quick_capture.md)                               | 1    | Not started |            |            |       |
+| 05 | [Quick capture](05_quick_capture.md)                               | 1    | Done        | 2026-04-23 | 2026-04-23 | Tray + Win32 global hotkey (ctypes); opt-in run-in-tray; `quick_capture` in `ui_settings.json`. |
 | 06 | [Tags and task dependencies](06_tags_and_dependencies.md)          | 2    | Not started |            |            |       |
 | 07 | [Child tasks and rollup](07_child_tasks_rollup.md)                 | 2    | Not started |            |            |       |
 | 08 | [Effort, time log, daily review](08_effort_and_time_log.md)        | 2    | Not started |            |            |       |

@@ -21,10 +21,22 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 - **Platform:** PySide6 desktop app; local-first, no HTTP server.
 - **Vault:** Each data folder is an isolated vault. Startup uses `TASKTRACKER_DATA` if set; otherwise the user picks or creates a vault folder.
 - **Encryption at rest:** While closed, the SQLite database is stored as `tasks.db.enc`; while running, a decrypted `tasks.db` exists in the vault. **Attachments** under `attachments/` are plaintext while unlocked and become per-file Fernet ciphertexts (sibling `*.enc` files) when the app closes, using the same key as the database. Master password gates launch (`auth.json` holds salt + PBKDF2 hash only).
-- **Per-vault UI state:** `ui_settings.json` — layout, shortcuts, date format, theme, text scale, display timezone, dashboard/saved-view preferences, last tab, etc.
+- **Per-vault UI state:** `ui_settings.json` — layout, shortcuts, date format, theme, text scale, display timezone, dashboard/saved-view preferences, last tab, **quick capture** (global hotkey, tray behavior, default I/U/area/person for the capture dialog), etc.
 - **Personal notes:** `personal_usage.html` — editable from Help → User guide → My notes.
+- **Background capture:** After vault unlock, a **system tray** icon is always shown when the OS supports it. A **global hotkey** (default **Ctrl+Shift+T**, Windows only) opens **Quick capture** from any app. Optional **keep running in tray** keeps the vault unlocked while the main window is closed (Exit from tray runs normal secure shutdown).
 
-**UI entry:** File / vault switch, Help → User guide, Settings menu.
+**UI entry:** File / vault switch, Help → User guide, Settings menu, tray icon.
+
+---
+
+## Quick capture
+
+- **Tray:** Context menu — **Quick capture**, **Open Task Tracker**, **Exit**. Single-click on the tray icon either opens quick capture or raises the main window (`tray_click_opens_capture` in `ui_settings.json`).
+- **Global hotkey:** Registered for the app session on **Windows** after unlock; configurable under **Settings → Keyboard shortcuts…** (same dialog as task action shortcuts). Re-registering applies immediately on OK.
+- **Dialog:** Minimal create form (title, optional impact/urgency, area, for-person, one-line description; **More…** for received date). **Create** / **Create and open**; **Enter** submits; new task is **open** with today’s received date unless overridden.
+- **Notifications:** Status bar when the main window is visible; tray balloon when it is hidden.
+- **Exit teardown:** The tray icon and global hotkey are disposed through the same shutdown path as **File → Quit** and tray **Exit**, including **Settings → Switch vault…** (`finalize_application_shutdown` in `MainWindow`), so the notification-area entry should not outlive the process on a clean exit.
+- **Tests:** `tests/test_quick_capture.py` covers settings coercion; hotkey binding is not exercised in CI.
 
 ---
 
@@ -61,7 +73,12 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 
 ## Task detail: core fields
 
-- **Lifecycle:** Received, due, closed dates; status (open, in progress, blocked, on hold, cancelled, closed).
+- **Lifecycle:** Received, due, closed dates; **status** (see meanings below).
+- **Status semantics (for UX and reporting):**
+  - **`open`** — Task is captured / in intake; not treated as actively in flight yet.
+  - **`in_progress`** — Task is actively being worked; primary execution state.
+  - **`blocked`**, **`on_hold`**, **`cancelled`**, **`closed`** — As labeled; `blocked` interacts with the Blockers list.
+  These two active states (`open` vs `in_progress`) are intentionally separate so reports and exports that group by `status` can distinguish backlog from in-flight; behavior does not auto-promote between them today.
 - **Priority:** ServiceNow-style P1–P5 from impact and urgency.
 - **Taxonomy:** Category → sub-category → area (per vault reference data).
 - **People:** “For person” from vault people master data.
@@ -103,6 +120,7 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 - **Soft limit:** ~100 MB per file with a confirm dialog above that.
 - **Storage:** `attachments/<task_id>/<sha256>_<filename>` relative to vault; metadata in `task_attachments` table (`display_name`, `storage_relpath`, `content_sha256`, `size_bytes`, `mime_hint`, `created_at`).
 - **Task delete:** Folder `attachments/<task_id>/` is removed after the task is deleted.
+- **Mental model — storage / reference, not a working directory:** **Add** copies bytes into the vault; the original path is optional afterward. **Open** copies vault bytes to a **session temp file** and hands that path to the OS default app — saves from that app update the temp file only, **not** the vault copy. There is no round-trip sync. Session temp is deleted when the app exits. Treat attachments as **archival or read-mostly context** tied to the task; for ongoing edit-in-place workflows, keep the live file in a normal folder (or use **Save As** from the external app to a path you control) and re-**Add** if the vault should hold a new revision.
 
 **Plans:** `plans/04_attachments.md` (Done).
 
@@ -178,7 +196,7 @@ All below are under the **Settings** menu unless noted.
 | Item | Purpose |
 |------|---------|
 | Customize task panel layout… | Reorder inline sections (Todos, Blockers, Recurring) and tabs (Notes, Activity). Per vault → `ui_settings.json`. |
-| Keyboard shortcuts… | New Task, Save Task, Close Task. |
+| Keyboard shortcuts… | New Task, Save Task, Close Task; quick capture global hotkey (Windows), tray options, default capture I/U/area/person. |
 | Date format… | Display-only format across UI (pickers, lists, reports, bulk-shift preview). Exports stay ISO. |
 | Display timezone… | How dates/times are interpreted for display. |
 | Text size… | UI text scaling. |
@@ -196,7 +214,7 @@ All below are under the **Settings** menu unless noted.
 
 ## Roadmap features (not in this catalog until shipped)
 
-Items covered by `plans/05_*.md` onward (quick capture, tags, child tasks, effort/time, external links, inbox actions, reminders/aging, board, intake, safety net) should be added **here** when their plan lands, alongside `user_guide.html` and `tech_decisions.md`.
+Items covered by `plans/06_*.md` onward (tags, child tasks, effort/time, external links, inbox actions, reminders/aging, board, intake, safety net) should be added **here** when their plan lands, alongside `user_guide.html` and `tech_decisions.md`.
 
 ---
 

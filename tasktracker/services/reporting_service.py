@@ -16,6 +16,12 @@ remains business-day aware where it counts (recurrence successor
 scheduling).
 """
 
+# Status semantics (see ``tech_decisions.md`` / user guide **Tasks → Statuses**):
+# - ``open`` = captured / intake; not actively in flight.
+# - ``in_progress`` = actively being worked.
+# Both sit in ``_OPEN_STATUSES`` for combined WIP totals; crosstabs and
+# ``open_by_status``-style summaries keep them as distinct keys.
+
 from __future__ import annotations
 
 import datetime as dt

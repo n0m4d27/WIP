@@ -42,6 +42,10 @@
 
 ### Task status
 - Include **`on_hold`** and **`cancelled`** in addition to `open`, `in_progress`, `blocked`, `closed`.
+- **Semantic distinction (documentation + future report polish):**
+  - **`open`** — Record exists (intake / backlog); work has not been claimed as actively in flight.
+  - **`in_progress`** — Work is actively underway; the main execution state before terminal or wait states.
+  Both remain non-terminal and both count toward the same “open workload” family in aggregations (`_OPEN_STATUSES` in `ReportingService`), but any report or export that keys on the raw `status` field should treat **`open` and `in_progress` as different buckets** so “intake vs in flight” stays meaningful. The UI does not automatically move tasks between these two values (aside from existing blocker-clear behavior moving off `blocked`). Refinements (automation, dashboards) should preserve this pair as the baseline distinction.
 
 ### Closed tasks
 - **Closed tasks remain editable** for notes and (as needed) other fields—no hard lock on post-close changes.
@@ -258,6 +262,26 @@ Field names from Access are inputs only; schema uses Pythonic consistency:
 - **Why not a single tarball:** Simpler incremental add/remove during a session and clearer per-file crash boundaries; the trade-off is many small Fernet payloads instead of one archive.
 - **Open externally:** `MainWindow` creates a per-run temp directory (`tempfile.mkdtemp`) under the OS temp root; `materialize_attachment_open_copy` copies vault bytes there and `QDesktopServices` opens the copy. The temp tree is removed on window close so decrypted copies do not linger.
 - **ORM + disk:** `TaskAttachment` rows cascade-delete with tasks; `delete_task` additionally `rmtree`s `attachments/<task_id>/` after commit so orphaned bytes cannot accumulate if SQLAlchemy already removed rows.
+
+## Quick capture (plan 05)
+
+- **Global hotkey (Windows):** `RegisterHotKey` / `UnregisterHotKey` via **ctypes**
+  plus a `QAbstractNativeEventFilter` on `WM_HOTKEY`, so no extra PyPI
+  dependency and no process injection. The sequence is edited as a normal
+  `QKeySequence` and stored as portable text; registration maps **A–Z**, **0–9**,
+  and **F1–F24** to virtual-key codes. Unsupported keys fail registration until
+  the mapper grows.
+- **Tray:** `QSystemTrayIcon` with **Quick capture**, **Open Task Tracker**, and
+  **Exit**. Single tray click follows `tray_click_opens_capture` (quick capture
+  vs raise main window). After a capture, if the main window is hidden, a
+  short **balloon** shows the new ticket; if the window is visible, the status
+  bar message is used instead.
+- **Lifecycle:** `keep_running_in_tray` (default **off**) sets
+  `QApplication.setQuitOnLastWindowClosed(False)` and makes **Close** on the
+  main window **hide** without `secure_shutdown`. **Exit** from the tray menu
+  (or closing the window when tray mode is off) runs the same
+  `finalize_application_shutdown` path as before (session close, temp cleanup,
+  encrypt DB + attachments).
 
 ## Deferred Decisions
 - Authentication/authorization model (single-user desktop may stay minimal).

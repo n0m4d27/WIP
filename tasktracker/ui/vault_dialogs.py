@@ -16,6 +16,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -53,6 +54,9 @@ def run_vault_picker_dialog(
     responsible for :func:`tasktracker.launcher_settings.save` so the
     startup flow can keep all disk I/O in one place.
     """
+    inst = QApplication.instance()
+    if inst is not None:
+        inst.setQuitOnLastWindowClosed(False)
     d = QDialog(parent)
     d.setWindowTitle("Select task vault")
     d.setMinimumWidth(560)

@@ -84,6 +84,17 @@ DEFAULT_SHORTCUTS: dict[str, str] = {
     "close_task": "Ctrl+Shift+C",
 }
 
+# Quick capture (plan 05): global hotkey + tray; defaults for the capture dialog.
+DEFAULT_QUICK_CAPTURE: dict[str, Any] = {
+    "hotkey": "Ctrl+Shift+T",
+    "keep_running_in_tray": False,
+    "tray_click_opens_capture": True,
+    "default_impact": 2,
+    "default_urgency": 2,
+    "default_area_id": None,
+    "default_person_id": None,
+}
+
 # Default Qt date display format. The string is a Qt ``QDateEdit.setDisplayFormat``
 # pattern: ``yyyy`` = 4-digit year, ``MM`` = zero-padded month, ``MMM`` = short
 # month name, ``dd`` = zero-padded day, ``d`` = unpadded day. ISO is the default
@@ -146,6 +157,7 @@ def default_ui_settings() -> dict[str, Any]:
         # its widgets without re-deriving defaults each session. Schema is
         # intentionally loose: each report owns its own keys.
         "reports": {"last_params": {}},
+        "quick_capture": dict(DEFAULT_QUICK_CAPTURE),
     }
 
 
@@ -264,6 +276,29 @@ def _coerce_saved_views(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _coerce_quick_capture(raw: dict[str, Any]) -> dict[str, Any]:
+    """Merge user ``quick_capture`` JSON into defaults with sane bounds."""
+    out = dict(DEFAULT_QUICK_CAPTURE)
+    hk = raw.get("hotkey")
+    if isinstance(hk, str) and hk.strip():
+        out["hotkey"] = hk.strip()[:128]
+    kr = raw.get("keep_running_in_tray")
+    if isinstance(kr, bool):
+        out["keep_running_in_tray"] = kr
+    tc = raw.get("tray_click_opens_capture")
+    if isinstance(tc, bool):
+        out["tray_click_opens_capture"] = tc
+    for key in ("default_impact", "default_urgency"):
+        v = raw.get(key)
+        if isinstance(v, int) and 1 <= v <= 3:
+            out[key] = v
+    for key in ("default_area_id", "default_person_id"):
+        v = raw.get(key)
+        if v is None or isinstance(v, int):
+            out[key] = v
+    return out
+
+
 def normalize_section_order(order: list[Any]) -> list[str]:
     """Return a permutation of TASK_SECTION_IDS: user order first, then any missing tails."""
     seen: set[str] = set()
@@ -320,6 +355,8 @@ def load_ui_settings() -> dict[str, Any]:
                         str(k): v for k, v in params.items() if isinstance(k, str)
                     }
             base["reports"]["last_params"] = cleaned
+    if isinstance(raw.get("quick_capture"), dict):
+        base["quick_capture"] = _coerce_quick_capture(raw["quick_capture"])
     return base
 
 

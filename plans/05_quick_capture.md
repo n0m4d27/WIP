@@ -62,39 +62,42 @@ fields.
 
 ## Work breakdown
 
-- [ ] Pick a global-hotkey library (PySide6's `QKeySequence` alone is in-app
+- [x] Pick a global-hotkey library (PySide6's `QKeySequence` alone is in-app
       only; a global hotkey needs a Windows-native helper — evaluate
       `pynput`, `keyboard`, or `qhotkey` bindings. Stay dependency-light).
-- [ ] Implement tray icon with menu and single-click action (configurable).
-- [ ] Build the quick-capture dialog.
-- [ ] Wire global hotkey to show dialog.
-- [ ] Settings store additions + keyboard-shortcuts dialog wiring.
-- [ ] Decide behavior when main window is closed: keep running in tray? Opt-in
+- [x] Implement tray icon with menu and single-click action (configurable).
+- [x] Build the quick-capture dialog.
+- [x] Wire global hotkey to show dialog.
+- [x] Settings store additions + keyboard-shortcuts dialog wiring.
+- [x] Decide behavior when main window is closed: keep running in tray? Opt-in
       setting, default off, to avoid surprises.
-- [ ] Handle the "no vault unlocked" case gracefully.
-- [ ] Tests + offscreen smoke.
+- [x] Handle the "no vault unlocked" case gracefully.
+- [x] Tests + offscreen smoke.
 
 ## Validation checklist
 
-- [ ] Hotkey opens the dialog instantly with title field focused.
-- [ ] Enter submits, dialog closes, task exists in DB with today's received
+- [x] Hotkey opens the dialog instantly with title field focused.
+- [x] Enter submits, dialog closes, task exists in DB with today's received
       date and the chosen priority.
-- [ ] Tray icon context menu entries work.
-- [ ] Escape dismisses without creating anything.
-- [ ] If vault is locked, dialog offers to unlock rather than erroring.
-- [ ] Changing the hotkey in Keyboard shortcuts dialog takes effect
+- [x] Tray icon context menu entries work.
+- [x] Escape dismisses without creating anything.
+- [x] If vault is locked, dialog offers to unlock rather than erroring.
+      _(Shipped behavior: tray + hotkey are registered only after a successful
+      vault unlock in startup; there is no capture path while the vault is
+      locked.)_
+- [x] Changing the hotkey in Keyboard shortcuts dialog takes effect
       immediately.
-- [ ] Closing main window with "keep running in tray" on keeps the tray and
+- [x] Closing main window with "keep running in tray" on keeps the tray and
       hotkey alive; with it off, exits the app.
-- [ ] Existing test suite green.
+- [x] Existing test suite green.
 
 ## Docs to update on landing
 
-- [ ] `tech_decisions.md` — rationale for global hotkey library choice and
+- [x] `tech_decisions.md` — rationale for global hotkey library choice and
       tray lifecycle semantics.
-- [ ] `tasktracker/resources/user_guide.html` — new "Quick capture" section.
-- [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
-- [ ] `FEATURE_GUIDE.md` — quick capture entry points and behavior.
+- [x] `tasktracker/resources/user_guide.html` — new "Quick capture" section.
+- [x] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `FEATURE_GUIDE.md` — quick capture entry points and behavior.
 
 ## Risks / open questions
 
@@ -110,4 +113,5 @@ fields.
 
 ## Follow-ups discovered
 
-_(empty at start of plan)_
+- Optional UX: global hotkey while the app is not running could show vault
+  login first (not implemented; today capture exists only after unlock).

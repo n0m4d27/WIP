@@ -46,6 +46,17 @@ ul { padding-left: 1.2em; }
 <li><b>Last-applied view is not auto-restored</b> on startup — by design, so yesterday's filters can't quietly hide today's new work. Apply the view you want whenever you need it.</li>
 </ul>
 
+<h2>Quick capture</h2>
+<ul>
+<li><b>What it is</b> — after you unlock a vault, the app shows a <b>system tray</b> icon and registers a <b>global hotkey</b> (default <code>Ctrl+Shift+T</code> on Windows) so you can log a task without switching to the main window first.</li>
+<li><b>Tray menu</b> — <b>Quick capture</b> opens the small dialog; <b>Open Task Tracker</b> shows the main window; <b>Exit</b> locks the vault the same way as closing the app (encrypts the database and attachments).</li>
+<li><b>Tray click</b> — one click on the icon either opens quick capture or raises the main window. Choose which under <b>Settings → Keyboard shortcuts…</b>.</li>
+<li><b>Keep running in tray</b> — optional checkbox in the same dialog. When on, closing the main window <i>hides</i> it and leaves the vault unlocked so the hotkey and tray keep working. When off, closing the window exits completely.</li>
+<li><b>Dialog</b> — type a <b>title</b> (required); optional impact, urgency, area, for-person, and a one-line description. Use <b>More…</b> if you need to change the <b>received</b> date (otherwise today is used). <b>Create</b> saves an <b>open</b> task; <b>Create and open</b> also switches to the Tasks tab and selects it.</li>
+<li><b>Confirmation</b> — if the main window is visible, the status bar shows the new ticket; if it is hidden, a short tray balloon appears instead.</li>
+<li><b>Changing the hotkey</b> — <b>Settings → Keyboard shortcuts…</b>; it must not duplicate New/Save/Close task shortcuts. The new combination applies as soon as you click OK.</li>
+</ul>
+
 <h2>Task templates</h2>
 <ul>
 <li><b>What they are</b> — saved <i>shapes</i> for tasks you create often: a name, title and description <b>patterns</b> (with small placeholders), optional default area and for-person, impact / urgency / status, and optional seed <b>todos</b> with business-day milestone offsets from the task's <b>received</b> date.</li>
@@ -76,7 +87,13 @@ ul { padding-left: 1.2em; }
 <li><b>Category / Sub-category / Area</b> — choose vault-specific taxonomy values for each task (Area is the task-level assignment; category/sub-category reflect that hierarchy).</li>
 <li><b>For person</b> — optional attribution for who the task is for (first name, last name, employee ID).</li>
 <li><b>Impact / Urgency / Priority</b> — priority is computed (ServiceNow-style matrix). Use <b>Priority matrix…</b> on the toolbar to pick impact/urgency pairs. Changing I or U writes audit entries and a system note when priority changes.</li>
-<li><b>Statuses</b> — open, in progress, blocked, on hold, cancelled, closed.</li>
+<li><b>Statuses</b> — intended meanings (for triage and for reports that count by status):
+  <ul>
+  <li><b>Open</b> — the task is recorded (intake / backlog) but you are <i>not</i> treating it as actively in flight yet.</li>
+  <li><b>In progress</b> — you are actively working the task; this is the main &quot;execution&quot; state.</li>
+  <li><b>Blocked</b>, <b>On hold</b>, <b>Cancelled</b>, <b>Closed</b> — as the labels suggest; see <b>Blockers</b> for how blocking interacts with status.</li>
+  </ul>
+  The app does not auto-flip between <b>Open</b> and <b>In progress</b>; you set status when you save the task (except clearing the last blocker may move status off <code>blocked</code>). Finer rules can be added later.</li>
 <li><b>Next milestone</b> — derived from the first <i>open</i> todo (in list order) that has a milestone date.</li>
 </ul>
 
@@ -146,6 +163,7 @@ ul { padding-left: 1.2em; }
 
 <h2>Reports &amp; export</h2>
 <p>The <b>Reports</b> tab has a list of management-style reports on the left, parameter controls in the middle, a results table, and a small summary panel. Pick a report, adjust the parameters, click <b>Run report</b>. The last-used parameters for each report are remembered between sessions in <code>ui_settings.json</code>.</p>
+<p><b>Status in reports:</b> Reports that show <i>open</i> workload or break out counts by status (for example <b>WIP &amp; aging</b> cross-tabs or <b>Weekly status</b>) treat <b>open</b> and <b>in progress</b> as <i>separate</i> status values. Use the definitions under <b>Tasks → Statuses</b> so &quot;intake&quot; vs &quot;in flight&quot; stay comparable over time; future report tweaks will build on the same distinction.</p>
 <ul>
 <li><b>WIP &amp; aging</b> — open tasks bucketed by age in calendar days (<code>0-7 / 8-30 / 31-90 / 90+</code>) cross-tabbed by status and priority. Parameter: <i>As of</i> date.</li>
 <li><b>Throughput</b> — closed-task counts over time, grouped weekly (Mon-Sun) or monthly. Parameters: <i>From</i>, <i>To</i>, <i>Period</i> (weekly/monthly), and an optional <i>Group by</i> split (none, by category, by <b>for-person</b>). "For-person" matches the <i>For person</i> field on the task form — the person the task is <i>for</i>, not the person entering it.</li>
