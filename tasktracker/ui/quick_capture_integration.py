@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QCoreApplication, QEvent, QObject
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QStyle, QSystemTrayIcon
 
@@ -41,7 +41,9 @@ class QuickCaptureIntegration(QObject):
     def _build_tray(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        self._tray = QSystemTrayIcon(self._tray_icon(), self._main)
+        # Parent the icon to the QApplication so closing/hiding MainWindow does
+        # not tie tray teardown order to the main window's QWidget lifetime.
+        self._tray = QSystemTrayIcon(self._tray_icon(), self._app)
         self._tray.setToolTip("Task Tracker")
         menu = QMenu()
         act_cap = QAction("Quick capture", menu)
@@ -98,6 +100,8 @@ class QuickCaptureIntegration(QObject):
         tray.deleteLater()
         self._tray = None
         self._app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self._app.processEvents()
 
     def cleanup_before_quit(self) -> None:
         if self._hotkey is not None:
@@ -106,9 +110,7 @@ class QuickCaptureIntegration(QObject):
         self._destroy_tray()
 
     def _show_main_window(self) -> None:
-        self._main.show()
-        self._main.raise_()
-        self._main.activateWindow()
+        self._main.show_main_window_foreground()
 
     def show_quick_capture(self) -> None:
         parent = self._main if self._main.isVisible() else None

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -210,6 +211,7 @@ class MainWindow(QMainWindow):
         # apply.
         self._last_bulk_shift: ShiftResult | None = None
         self._quick_capture_integration: Any | None = None
+        self._shutdown_completed: bool = False
 
         self._create_task_actions()
         self._build_ui()
@@ -660,7 +662,7 @@ class MainWindow(QMainWindow):
         m_file.addAction("Export rich workbook (xlsx)…", self._export_rich_workbook)
         m_file.addAction("Export reports bundle (CSVs in folder)…", self._export_reports_bundle)
         m_file.addSeparator()
-        m_file.addAction("Quit", self.close)
+        m_file.addAction("Quit", self._quit_application)
 
         m_edit = self.menuBar().addMenu("&Edit")
         self.act_shift_selected = QAction("Shift selected tasks…", self)
@@ -2585,10 +2587,39 @@ class MainWindow(QMainWindow):
 
     def open_task_on_tasks_tab(self, task_id: int) -> None:
         """Show the main window and select ``task_id`` on the Tasks tab."""
+        self.show_main_window_foreground()
+        self._jump_to_task_in_tasks_tab(task_id)
+
+    def show_main_window_foreground(self) -> None:
+        """Best-effort restore and foreground of the main window."""
         self.show()
+        if self.isMinimized():
+            self.showNormal()
         self.raise_()
         self.activateWindow()
-        self._jump_to_task_in_tasks_tab(task_id)
+        self.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+        self._windows_foreground_nudge()
+        # A short follow-up activation helps on some Windows focus-policy edges.
+        QTimer.singleShot(120, self._windows_foreground_nudge)
+
+    def _windows_foreground_nudge(self) -> None:
+        """Use Win32 activation as a best-effort complement to Qt APIs."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            hwnd = int(self.winId())
+            if hwnd == 0:
+                return
+            sw_restore = 9
+            user32.ShowWindow(hwnd, sw_restore)
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        except Exception:
+            # Foreground policy can reject requests; never fail the user flow.
+            return
 
     def _jump_to_task_in_tasks_tab(self, task_id: int) -> None:
         """Switch the central tab widget to the Tasks tab and highlight
@@ -2794,6 +2825,9 @@ class MainWindow(QMainWindow):
         self.act_undo_bulk_shift.setToolTip(result.describe())
 
     def finalize_application_shutdown(self) -> None:
+        if self._shutdown_completed:
+            return
+        self._shutdown_completed = True
         integ = self._quick_capture_integration
         if integ is not None:
             integ.cleanup_before_quit()
@@ -2805,7 +2839,22 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _quit_application(self) -> None:
+        """Encrypt and exit completely (always stops the process).
+
+        The title-bar close button still minimizes to the tray when
+        **keep_running_in_tray** is enabled; **File → Quit** always performs a
+        full shutdown so the tray icon and background process do not linger.
+        """
+        self.finalize_application_shutdown()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._shutdown_completed:
+            super().closeEvent(event)
+            return
         integ = self._quick_capture_integration
         if integ is not None and integ.keep_tray_alive():
             event.ignore()
@@ -2813,3 +2862,6 @@ class MainWindow(QMainWindow):
             return
         self.finalize_application_shutdown()
         super().closeEvent(event)
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()

@@ -35,7 +35,7 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 - **Global hotkey:** Registered for the app session on **Windows** after unlock; configurable under **Settings → Keyboard shortcuts…** (same dialog as task action shortcuts). Re-registering applies immediately on OK.
 - **Dialog:** Minimal create form (title, optional impact/urgency, area, for-person, one-line description; **More…** for received date). **Create** / **Create and open**; **Enter** submits; new task is **open** with today’s received date unless overridden.
 - **Notifications:** Status bar when the main window is visible; tray balloon when it is hidden.
-- **Exit teardown:** The tray icon and global hotkey are disposed through the same shutdown path as **File → Quit** and tray **Exit**, including **Settings → Switch vault…** (`finalize_application_shutdown` in `MainWindow`), so the notification-area entry should not outlive the process on a clean exit.
+- **Exit teardown:** The tray icon and global hotkey are disposed through the same shutdown path as **File → Quit**, tray **Exit**, and **Settings → Switch vault…** (`finalize_application_shutdown` in `MainWindow`). **File → Quit** always stops the process and encrypts the vault. If **keep_running_in_tray** is on, the title-bar **X** only hides the main window (tray stays) until you use **File → Quit**, tray **Exit**, or **Switch vault**.
 - **Tests:** `tests/test_quick_capture.py` covers settings coercion; hotkey binding is not exercised in CI.
 
 ---
