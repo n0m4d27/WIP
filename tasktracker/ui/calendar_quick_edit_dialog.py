@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QInputDialog,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -51,6 +52,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
+    QPlainTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -158,6 +160,11 @@ class CalendarQuickEditDialog(QDialog):
         self.f_title = QLineEdit(task.title)
         self.f_title.setReadOnly(True)
         form.addRow("Title:", self.f_title)
+        self.f_resolution = QPlainTextEdit()
+        self.f_resolution.setPlainText(task.resolution or "")
+        self.f_resolution.setPlaceholderText("Required when closing task.")
+        self.f_resolution.setMinimumHeight(90)
+        form.addRow("Resolution:", self.f_resolution)
 
         self.f_status = QComboBox()
         for s in TaskStatus:
@@ -310,8 +317,8 @@ class CalendarQuickEditDialog(QDialog):
         # Todos table. The rows are not directly editable - users open
         # the add/edit dialog via the buttons below, which keeps the
         # edit flow the same as the Tasks-tab editor.
-        self.tbl_todos = QTableWidget(0, 3)
-        self.tbl_todos.setHorizontalHeaderLabels(["Title", "Milestone", "Done"])
+        self.tbl_todos = QTableWidget(0, 4)
+        self.tbl_todos.setHorizontalHeaderLabels(["Title", "Resolution", "Milestone", "Done"])
         self.tbl_todos.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Interactive
         )
@@ -370,17 +377,20 @@ class CalendarQuickEditDialog(QDialog):
             title_item = QTableWidgetItem(td.title)
             title_item.setFlags(title_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             title_item.setData(Qt.ItemDataRole.UserRole, td.id)
+            res_item = QTableWidgetItem(td.resolution or "")
+            res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             ms_item = QTableWidgetItem(format_date(td.milestone_date, self._date_fmt))
             ms_item.setFlags(ms_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             done_item = QTableWidgetItem("yes" if td.completed_at else "")
             done_item.setFlags(done_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.tbl_todos.setItem(r, 0, title_item)
-            self.tbl_todos.setItem(r, 1, ms_item)
-            self.tbl_todos.setItem(r, 2, done_item)
+            self.tbl_todos.setItem(r, 1, res_item)
+            self.tbl_todos.setItem(r, 2, ms_item)
+            self.tbl_todos.setItem(r, 3, done_item)
             if td.id in keep_ids:
                 self.tbl_todos.selectRow(r)
-        self.tbl_todos.resizeColumnToContents(1)
         self.tbl_todos.resizeColumnToContents(2)
+        self.tbl_todos.resizeColumnToContents(3)
 
     def _selected_todo_ids(self) -> list[int]:
         out: list[int] = []
@@ -395,8 +405,8 @@ class CalendarQuickEditDialog(QDialog):
         result = run_add_todo_dialog(self)
         if result is None:
             return
-        title, ms = result
-        self._svc.add_todo(self._task_id, title=title, milestone_date=ms)
+        title, resolution, ms = result
+        self._svc.add_todo(self._task_id, title=title, resolution=resolution, milestone_date=ms)
         self._reload_todos()
 
     def _edit_selected_todo(self) -> None:
@@ -416,17 +426,32 @@ class CalendarQuickEditDialog(QDialog):
         result = run_edit_todo_dialog(
             self,
             current_title=current.title,
+            current_resolution=current.resolution,
             current_milestone=current.milestone_date,
         )
         if result is None:
             return
-        new_title, new_ms = result
-        self._svc.update_todo(ids[0], title=new_title, milestone_date=new_ms)
+        new_title, new_resolution, new_ms = result
+        self._svc.update_todo(ids[0], title=new_title, resolution=new_resolution, milestone_date=new_ms)
         self._reload_todos()
 
     def _complete_selected_todos(self) -> None:
         for tid in self._selected_todo_ids():
-            self._svc.complete_todo(tid)
+            td = self._svc.get_todo(tid)
+            if td is None:
+                continue
+            resolution = (td.resolution or "").strip()
+            if not resolution:
+                text, ok = QInputDialog.getMultiLineText(
+                    self,
+                    "Todo resolution required",
+                    "Enter resolution before marking todo done:",
+                    "",
+                )
+                resolution = text.strip() if ok else ""
+                if not resolution:
+                    continue
+            self._svc.complete_todo(tid, resolution=resolution)
         self._reload_todos()
 
     def _delete_selected_todos(self) -> None:
@@ -560,12 +585,18 @@ class CalendarQuickEditDialog(QDialog):
 
         was_closed = existing.status == TaskStatus.CLOSED
         closing_now = (st == TaskStatus.CLOSED) and not was_closed
+        task_resolution = self.f_resolution.toPlainText().strip() or None
+        if closing_now and not task_resolution:
+            QMessageBox.warning(self, "Resolution required", "Enter resolution before closing this task.")
+            self.f_resolution.setFocus()
+            return
 
         # Mirrors MainWindow._save_task_detail: hand the actual close
         # transition off to TaskService.close_task so recurrence successors
         # spawn correctly even when the user closes via the quick-edit dialog.
         self._svc.update_task_fields(
             self._task_id,
+            resolution=task_resolution,
             status=None if closing_now else st,
             impact=self.f_impact.value(),
             urgency=self.f_urgency.value(),
@@ -576,7 +607,7 @@ class CalendarQuickEditDialog(QDialog):
         )
         if closing_now:
             _, self.spawned_successor = self._svc.close_task(
-                self._task_id, closed_on=closed_py
+                self._task_id, closed_on=closed_py, resolution=task_resolution
             )
 
         # Fan the due-date delta out to todos when requested.

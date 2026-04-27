@@ -79,6 +79,8 @@ def upgrade_schema(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN area_id INTEGER"))
         if "person_id" not in col_names:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN person_id INTEGER"))
+        if "resolution" not in col_names:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN resolution TEXT"))
         conn.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_tasks_ticket_number_unique "
@@ -148,6 +150,10 @@ def upgrade_schema(engine: Engine) -> None:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_task_attachments_task_id ON task_attachments(task_id)")
         )
+        todo_rows = conn.execute(text("PRAGMA table_info(todo_items)")).fetchall()
+        todo_col_names = {r[1] for r in todo_rows}
+        if "resolution" not in todo_col_names:
+            conn.execute(text("ALTER TABLE todo_items ADD COLUMN resolution TEXT"))
 
     Session = sessionmaker(bind=engine, expire_on_commit=True, future=True)
     with Session() as session:

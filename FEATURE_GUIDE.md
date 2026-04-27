@@ -74,6 +74,7 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 ## Task detail: core fields
 
 - **Lifecycle:** Received, due, closed dates; **status** (see meanings below).
+- **Resolution:** Task-level plain-text close summary (quick reference). Required when transitioning a task to **closed** from wired UI flows.
 - **Status semantics (for UX and reporting):**
   - **`open`** — Task is captured / in intake; not treated as actively in flight yet.
   - **`in_progress`** — Task is actively being worked; primary execution state.
@@ -102,6 +103,7 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 ## Todos
 
 - Ordered checklist per task; optional **milestone** dates on items.
+- Optional per-todo **resolution** note for quick reference; todo completion paths prompt for one when missing.
 - **Next milestone** on the task is derived from the first open dated todo.
 
 ---

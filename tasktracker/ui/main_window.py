@@ -457,6 +457,8 @@ class MainWindow(QMainWindow):
             if hasattr(self, "f_description"):
                 self.f_description.setFont(f)
                 self.f_description.document().setDefaultFont(f)
+            if hasattr(self, "f_resolution"):
+                self.f_resolution.setFont(f)
             if hasattr(self, "note_editor"):
                 self.note_editor.setFont(f)
                 self.note_editor.document().setDefaultFont(f)
@@ -468,6 +470,9 @@ class MainWindow(QMainWindow):
             if hasattr(self, "f_description"):
                 hf = self.f_description.fontMetrics().height()
                 self.f_description.setMinimumHeight(max(int(round(hf * 14)), 180))
+            if hasattr(self, "f_resolution"):
+                hr = self.f_resolution.fontMetrics().height()
+                self.f_resolution.setMinimumHeight(max(int(round(hr * 6)), 100))
             if hasattr(self, "note_editor"):
                 hn = self.note_editor.fontMetrics().height()
                 self.note_editor.setMinimumHeight(max(int(round(hn * 10)), 120))
@@ -855,6 +860,12 @@ class MainWindow(QMainWindow):
         self.f_description.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
+        self.f_resolution = QPlainTextEdit()
+        self.f_resolution.setPlaceholderText("Required when closing task.")
+        self.f_resolution.setMinimumHeight(110)
+        self.f_resolution.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+        )
         self.f_status = QComboBox()
         for s in TaskStatus:
             self.f_status.addItem(s.value.replace("_", " ").title(), s.value)
@@ -911,6 +922,7 @@ class MainWindow(QMainWindow):
         left_form.addRow("Title", self.f_title)
         left_form.addRow("Status / I / U / P", status_row)
         left_form.addRow("Description", self.f_description)
+        left_form.addRow("Resolution", self.f_resolution)
 
         right_col = QWidget()
         right_form = QFormLayout(right_col)
@@ -1908,6 +1920,7 @@ class MainWindow(QMainWindow):
         self.lbl_ticket.setText("—")
         self.f_title.clear()
         self.f_description.clear()
+        self.f_resolution.clear()
         self.todo_list.clear()
         self.note_list.clear()
         self.note_editor.clear()
@@ -1957,6 +1970,7 @@ class MainWindow(QMainWindow):
         self.lbl_ticket.setText(format_task_ticket(task.ticket_number))
         self.f_title.setText(task.title)
         self.f_description.setHtml(task.description or "")
+        self.f_resolution.setPlainText(task.resolution or "")
         idx = self.f_status.findData(task.status)
         self.f_status.setCurrentIndex(max(0, idx))
         self.f_impact.setValue(task.impact)
@@ -1980,9 +1994,12 @@ class MainWindow(QMainWindow):
         for td in sorted(task.todos, key=lambda x: x.sort_order):
             ms = fmt_date(td.milestone_date, fmt) if td.milestone_date else ""
             done = "✓ " if td.completed_at else ""
-            self.todo_list.addItem(f"{done}{td.title} [{ms}]")
+            res_mark = " (R)" if td.resolution else ""
+            self.todo_list.addItem(f"{done}{td.title}{res_mark} [{ms}]")
             it = self.todo_list.item(self.todo_list.count() - 1)
             it.setData(Qt.ItemDataRole.UserRole, td.id)
+            if td.resolution:
+                it.setToolTip(f"Resolution: {td.resolution}")
 
         self.note_list.clear()
         for n in sorted(task.notes, key=lambda x: x.created_at):
@@ -2054,15 +2071,21 @@ class MainWindow(QMainWindow):
         desc_plain = self.f_description.toPlainText().strip()
         if not desc_plain:
             desc_html = None
+        task_resolution = self.f_resolution.toPlainText().strip() or None
 
         existing = self._svc.get_task(self._current_task_id)
         was_closed = existing is not None and existing.status == TaskStatus.CLOSED
         closing_now = (st == TaskStatus.CLOSED) and not was_closed
+        if closing_now and not task_resolution:
+            self._notify("Resolution is required before closing a task.")
+            self.f_resolution.setFocus()
+            return
 
         self._svc.update_task_fields(
             self._current_task_id,
             title=self.f_title.text(),
             description=desc_html,
+            resolution=task_resolution,
             status=None if closing_now else st,
             impact=self.f_impact.value(),
             urgency=self.f_urgency.value(),
@@ -2075,7 +2098,9 @@ class MainWindow(QMainWindow):
 
         new_t = None
         if closing_now:
-            _, new_t = self._svc.close_task(self._current_task_id, closed_on=closed_py)
+            _, new_t = self._svc.close_task(
+                self._current_task_id, closed_on=closed_py, resolution=task_resolution
+            )
 
         self._reload_task_list()
         self._load_task_detail()
@@ -2093,7 +2118,20 @@ class MainWindow(QMainWindow):
             return
         if self._current_task_id is None:
             return
-        task, new_t = self._svc.close_task(self._current_task_id)
+        resolution = self.f_resolution.toPlainText().strip()
+        if not resolution:
+            text, ok = QInputDialog.getMultiLineText(
+                self,
+                "Task resolution required",
+                "Enter resolution before closing:",
+                "",
+            )
+            resolution = text.strip() if ok else ""
+            if not resolution:
+                self._notify("Task close cancelled: resolution is required.")
+                return
+            self.f_resolution.setPlainText(resolution)
+        task, new_t = self._svc.close_task(self._current_task_id, resolution=resolution)
         msg = "Task closed."
         if new_t:
             msg += f" Created successor {format_task_ticket(new_t.ticket_number)} (id {new_t.id})."
@@ -2154,13 +2192,19 @@ class MainWindow(QMainWindow):
         st = self.f_status.currentData()
         desc_html = self.f_description.toHtml()
         desc_plain = self.f_description.toPlainText().strip()
+        task_resolution = self.f_resolution.toPlainText().strip() or None
         if not desc_plain:
             desc_html = None
+        if st == TaskStatus.CLOSED and not task_resolution:
+            self._notify("Resolution is required for closed tasks.")
+            self.f_resolution.setFocus()
+            return
         t = self._svc.create_task(
             title=self.f_title.text(),
             received_date=_qdate_to_py(self.f_received.date()),
             due_date=due_py,
             description=desc_html,
+            resolution=task_resolution,
             status=str(st) if st else TaskStatus.OPEN,
             impact=self.f_impact.value(),
             urgency=self.f_urgency.value(),
@@ -2213,6 +2257,7 @@ class MainWindow(QMainWindow):
         self.lbl_ticket.setText("(new)")
         self.f_title.setText(snap.title)
         self.f_description.setHtml(snap.description or "")
+        self.f_resolution.clear()
         self.f_impact.setValue(snap.impact)
         self.f_urgency.setValue(snap.urgency)
         idx = self.f_status.findData(snap.status)
@@ -2267,8 +2312,10 @@ class MainWindow(QMainWindow):
         result = run_add_todo_dialog(self)
         if result is None:
             return
-        text, ms = result
-        created = self._svc.add_todo(self._current_task_id, title=text, milestone_date=ms)
+        text, resolution, ms = result
+        created = self._svc.add_todo(
+            self._current_task_id, title=text, resolution=resolution, milestone_date=ms
+        )
         self._load_task_detail()
         self._reload_task_list()
         if created is not None:
@@ -2281,7 +2328,22 @@ class MainWindow(QMainWindow):
         tid = it.data(Qt.ItemDataRole.UserRole)
         if tid:
             keep_id = int(tid)
-            self._svc.complete_todo(int(tid))
+            current = self._svc.get_todo(keep_id)
+            if current is None:
+                return
+            resolution = (current.resolution or "").strip()
+            if not resolution:
+                text, ok = QInputDialog.getMultiLineText(
+                    self,
+                    "Todo resolution required",
+                    "Enter resolution before marking todo done:",
+                    "",
+                )
+                resolution = text.strip() if ok else ""
+                if not resolution:
+                    self._notify("Todo completion cancelled: resolution is required.")
+                    return
+            self._svc.complete_todo(keep_id, resolution=resolution)
             self._load_task_detail()
             self._reload_task_list()
             self._select_list_item_by_id(self.todo_list, keep_id)
@@ -2300,12 +2362,15 @@ class MainWindow(QMainWindow):
         result = run_edit_todo_dialog(
             self,
             current_title=current.title,
+            current_resolution=current.resolution,
             current_milestone=current.milestone_date,
         )
         if result is None:
             return
-        new_title, new_ms = result
-        self._svc.update_todo(int(tid), title=new_title, milestone_date=new_ms)
+        new_title, new_resolution, new_ms = result
+        self._svc.update_todo(
+            int(tid), title=new_title, resolution=new_resolution, milestone_date=new_ms
+        )
         self._load_task_detail()
         self._reload_task_list()
         self._select_list_item_by_id(self.todo_list, int(tid))

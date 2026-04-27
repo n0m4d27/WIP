@@ -46,7 +46,7 @@ def test_wip_aging_buckets_by_age(svc: TaskService) -> None:
     svc.create_task(title="older", received_date=AS_OF - dt.timedelta(days=60))
     svc.create_task(title="ancient", received_date=AS_OF - dt.timedelta(days=200))
     closed = svc.create_task(title="closed-ignored", received_date=AS_OF - dt.timedelta(days=10))
-    svc.close_task(closed.id, closed_on=AS_OF)
+    svc.close_task(closed.id, closed_on=AS_OF, resolution="Done")
 
     res = ReportingService(svc.session).wip_aging(as_of=AS_OF)
     assert res.meta["total_open"] == 4
@@ -70,9 +70,9 @@ def test_throughput_weekly_groups_by_iso_week(svc: TaskService) -> None:
     b = svc.create_task(title="b", received_date=dt.date(2026, 6, 1))
     c = svc.create_task(title="c", received_date=dt.date(2026, 6, 1))
     # Two closed in week of Mon 2026-06-15, one in week of Mon 2026-06-22.
-    svc.close_task(a.id, closed_on=dt.date(2026, 6, 16))
-    svc.close_task(b.id, closed_on=dt.date(2026, 6, 18))
-    svc.close_task(c.id, closed_on=dt.date(2026, 6, 23))
+    svc.close_task(a.id, closed_on=dt.date(2026, 6, 16), resolution="Done")
+    svc.close_task(b.id, closed_on=dt.date(2026, 6, 18), resolution="Done")
+    svc.close_task(c.id, closed_on=dt.date(2026, 6, 23), resolution="Done")
 
     res = ReportingService(svc.session).throughput(
         from_date=dt.date(2026, 6, 1),
@@ -93,7 +93,7 @@ def test_throughput_group_by_person_legacy_alias(svc: TaskService) -> None:
         received_date=dt.date(2026, 6, 1),
         person_id=ada_id,
     )
-    svc.close_task(a.id, closed_on=dt.date(2026, 6, 16))
+    svc.close_task(a.id, closed_on=dt.date(2026, 6, 16), resolution="Done")
     res = ReportingService(svc.session).throughput(
         from_date=dt.date(2026, 6, 1),
         to_date=dt.date(2026, 6, 30),
@@ -106,7 +106,7 @@ def test_throughput_group_by_person_legacy_alias(svc: TaskService) -> None:
 
 def test_throughput_excludes_tasks_outside_window(svc: TaskService) -> None:
     a = svc.create_task(title="early", received_date=dt.date(2026, 5, 1))
-    svc.close_task(a.id, closed_on=dt.date(2026, 5, 15))
+    svc.close_task(a.id, closed_on=dt.date(2026, 5, 15), resolution="Done")
     res = ReportingService(svc.session).throughput(
         from_date=dt.date(2026, 6, 1),
         to_date=dt.date(2026, 6, 30),
@@ -153,7 +153,7 @@ def test_workload_per_person_with_unassigned_bucket(svc: TaskService) -> None:
 
 def test_workload_ignores_closed_tasks(svc: TaskService) -> None:
     t = svc.create_task(title="will close", received_date=AS_OF - dt.timedelta(days=3))
-    svc.close_task(t.id, closed_on=AS_OF)
+    svc.close_task(t.id, closed_on=AS_OF, resolution="Done")
     res = ReportingService(svc.session).workload(as_of=AS_OF)
     assert res.meta["total_open"] == 0
     assert res.rows == []
@@ -170,9 +170,9 @@ def test_sla_counts_on_time_late_and_no_due(svc: TaskService) -> None:
         title="late", received_date=dt.date(2026, 6, 1), due_date=dt.date(2026, 6, 10)
     )
     no_due = svc.create_task(title="no-due", received_date=dt.date(2026, 6, 1))
-    svc.close_task(on_time.id, closed_on=dt.date(2026, 6, 18))
-    svc.close_task(late.id, closed_on=dt.date(2026, 6, 14))  # 4 days late
-    svc.close_task(no_due.id, closed_on=dt.date(2026, 6, 15))
+    svc.close_task(on_time.id, closed_on=dt.date(2026, 6, 18), resolution="Done")
+    svc.close_task(late.id, closed_on=dt.date(2026, 6, 14), resolution="Done")  # 4 days late
+    svc.close_task(no_due.id, closed_on=dt.date(2026, 6, 15), resolution="Done")
 
     res = ReportingService(svc.session).sla(
         from_date=dt.date(2026, 6, 1), to_date=dt.date(2026, 6, 30)
@@ -188,7 +188,7 @@ def test_sla_handles_only_no_due(svc: TaskService) -> None:
     """Edge case: nothing in the window had a due date set so miss-rate
     must not divide by zero."""
     t = svc.create_task(title="no due", received_date=dt.date(2026, 6, 1))
-    svc.close_task(t.id, closed_on=dt.date(2026, 6, 5))
+    svc.close_task(t.id, closed_on=dt.date(2026, 6, 5), resolution="Done")
     res = ReportingService(svc.session).sla(
         from_date=dt.date(2026, 6, 1), to_date=dt.date(2026, 6, 30)
     )
@@ -209,7 +209,7 @@ def test_category_mix_received_closed_and_open(svc: TaskService) -> None:
     svc.create_task(
         title="net2-open", received_date=dt.date(2026, 6, 10), area_id=net_area
     )
-    svc.close_task(a.id, closed_on=dt.date(2026, 6, 20))
+    svc.close_task(a.id, closed_on=dt.date(2026, 6, 20), resolution="Done")
 
     res = ReportingService(svc.session).category_mix(
         from_date=dt.date(2026, 6, 1), to_date=dt.date(2026, 6, 30)
@@ -238,12 +238,12 @@ def test_weekly_status_counts_match_window(svc: TaskService) -> None:
     closed_in_window = svc.create_task(
         title="cw", received_date=AS_OF - dt.timedelta(days=20)
     )
-    svc.close_task(closed_in_window.id, closed_on=AS_OF - dt.timedelta(days=2))
+    svc.close_task(closed_in_window.id, closed_on=AS_OF - dt.timedelta(days=2), resolution="Done")
 
     closed_too_old = svc.create_task(
         title="old close", received_date=AS_OF - dt.timedelta(days=40)
     )
-    svc.close_task(closed_too_old.id, closed_on=AS_OF - dt.timedelta(days=15))
+    svc.close_task(closed_too_old.id, closed_on=AS_OF - dt.timedelta(days=15), resolution="Done")
 
     svc.create_task(
         title="due soon",

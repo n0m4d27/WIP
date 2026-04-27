@@ -43,7 +43,7 @@ def test_recurring_on_close_spawns(svc: TaskService) -> None:
         interval_days=7,
         todo_templates=[(0, "Step one", 0), (1, "Step two", 3)],
     )
-    closed, new_t = svc.close_task(t.id, closed_on=dt.date(2026, 4, 8))
+    closed, new_t = svc.close_task(t.id, closed_on=dt.date(2026, 4, 8), resolution="Completed weekly run")
     assert closed is not None
     assert closed.status == TaskStatus.CLOSED
     assert new_t is not None
@@ -62,10 +62,51 @@ def test_close_idempotent_no_double_spawn(svc: TaskService) -> None:
         interval_days=1,
         todo_templates=[],
     )
-    _, n1 = svc.close_task(t.id)
+    _, n1 = svc.close_task(t.id, resolution="First closure")
     assert n1 is not None
     _, n2 = svc.close_task(t.id)
     assert n2 is None
+
+
+def test_close_task_requires_resolution(svc: TaskService) -> None:
+    t = svc.create_task(title="Needs resolution", received_date=dt.date(2026, 4, 1))
+    try:
+        svc.close_task(t.id)
+        assert False, "close_task should require resolution on first close"
+    except ValueError:
+        pass
+
+
+def test_complete_todo_sets_resolution(svc: TaskService) -> None:
+    t = svc.create_task(title="Todo parent", received_date=dt.date(2026, 8, 1))
+    todo = svc.add_todo(t.id, title="Do thing")
+    assert todo is not None
+    svc.complete_todo(todo.id, resolution="Implemented and validated")
+    reloaded = svc.get_todo(todo.id)
+    assert reloaded is not None
+    assert reloaded.completed_at is not None
+    assert reloaded.resolution == "Implemented and validated"
+
+
+def test_update_task_fields_resolution(svc: TaskService) -> None:
+    t = svc.create_task(title="With task resolution", received_date=dt.date(2026, 9, 1))
+    svc.update_task_fields(t.id, resolution="Root cause identified")
+    loaded = svc.get_task(t.id)
+    assert loaded is not None
+    assert loaded.resolution == "Root cause identified"
+    svc.update_task_fields(t.id, resolution=None)
+    cleared = svc.get_task(t.id)
+    assert cleared is not None
+    assert cleared.resolution is None
+
+
+def test_update_todo_resolution(svc: TaskService) -> None:
+    t = svc.create_task(title="Parent", received_date=dt.date(2026, 8, 1))
+    todo = svc.add_todo(t.id, title="Draft report")
+    assert todo is not None
+    updated = svc.update_todo(todo.id, resolution="Closed with final document")
+    assert updated is not None
+    assert updated.resolution == "Closed with final document"
 
 
 def test_ticket_numbers_increment_from_zero(svc: TaskService) -> None:

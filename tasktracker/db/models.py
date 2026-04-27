@@ -32,6 +32,7 @@ class Task(Base):
     ticket_number: Mapped[int | None] = mapped_column(Integer, unique=True, index=True, nullable=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
     impact: Mapped[int] = mapped_column(Integer, nullable=False, default=2)  # 1–3
@@ -162,6 +163,7 @@ class TodoItem(Base):
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
     milestone_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

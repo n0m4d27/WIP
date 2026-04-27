@@ -1,4 +1,4 @@
-"""Dialog to add or edit a todo with title and optional milestone date."""
+"""Dialog to add or edit a todo with title, resolution, and milestone date."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QLineEdit,
+    QPlainTextEdit,
     QVBoxLayout,
 )
 
@@ -30,10 +31,11 @@ def run_add_todo_dialog(
     parent=None,
     *,
     initial_title: str = "",
+    initial_resolution: str = "",
     initial_milestone: dt.date | None = None,
     window_title: str = "Add todo",
-) -> tuple[str, dt.date | None] | None:
-    """Return ``(title, milestone_date_or_None)`` or ``None`` if cancelled.
+) -> tuple[str, str | None, dt.date | None] | None:
+    """Return ``(title, resolution_or_None, milestone_date_or_None)`` or ``None`` if cancelled.
 
     Pass ``initial_title`` / ``initial_milestone`` to pre-fill the form when
     editing an existing todo; in that case the milestone checkbox reflects
@@ -46,6 +48,10 @@ def run_add_todo_dialog(
 
     title = QLineEdit()
     title.setText(initial_title)
+    resolution = QPlainTextEdit()
+    resolution.setPlainText(initial_resolution)
+    resolution.setPlaceholderText("Optional quick-reference resolution for this todo.")
+    resolution.setMinimumHeight(90)
     has_ms = QCheckBox("Milestone date")
     has_ms.setChecked(initial_milestone is not None)
     ms_row, ms_date = date_edit_with_today_button(d, display_format=format_from_parent(parent))
@@ -61,6 +67,7 @@ def run_add_todo_dialog(
 
     form = QFormLayout()
     form.addRow("Title", title)
+    form.addRow("Resolution", resolution)
     form.addRow("", has_ms)
     form.addRow("Milestone", ms_row)
 
@@ -79,20 +86,23 @@ def run_add_todo_dialog(
     t = title.text().strip()
     if not t:
         return None
+    res = resolution.toPlainText().strip() or None
     ms: dt.date | None = _qdate_to_py(ms_date.date()) if has_ms.isChecked() else None
-    return (t, ms)
+    return (t, res, ms)
 
 
 def run_edit_todo_dialog(
     parent,
     *,
     current_title: str,
+    current_resolution: str | None,
     current_milestone: dt.date | None,
-) -> tuple[str, dt.date | None] | None:
+) -> tuple[str, str | None, dt.date | None] | None:
     """Pre-filled variant of :func:`run_add_todo_dialog` for editing a todo."""
     return run_add_todo_dialog(
         parent,
         initial_title=current_title,
+        initial_resolution=current_resolution or "",
         initial_milestone=current_milestone,
         window_title="Edit todo",
     )

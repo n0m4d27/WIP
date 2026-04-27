@@ -768,6 +768,7 @@ class TaskService:
         received_date: dt.date,
         due_date: dt.date | None = None,
         description: str | None = None,
+        resolution: str | None = None,
         status: str = TaskStatus.OPEN,
         impact: int = 2,
         urgency: int = 2,
@@ -780,6 +781,7 @@ class TaskService:
             ticket_number=ticket_number,
             title=title.strip(),
             description=description,
+            resolution=(resolution.strip() if resolution is not None and resolution.strip() else None),
             status=status,
             impact=impact,
             urgency=urgency,
@@ -812,6 +814,7 @@ class TaskService:
         *,
         title: str | None = None,
         description: "str | None | object" = _UNSET,
+        resolution: "str | None | object" = _UNSET,
         status: str | None = None,
         impact: int | None = None,
         urgency: int | None = None,
@@ -831,6 +834,15 @@ class TaskService:
         if description is not _UNSET and description != task.description:
             _log_change(self.session, task.id, "description", task.description, description)
             task.description = description  # type: ignore[assignment]
+        if resolution is not _UNSET:
+            new_resolution = (
+                None
+                if resolution is None or not str(resolution).strip()
+                else str(resolution).strip()
+            )
+            if new_resolution != task.resolution:
+                _log_change(self.session, task.id, "resolution", task.resolution, new_resolution)
+                task.resolution = new_resolution
         if status is not None and status != task.status:
             _log_change(self.session, task.id, "status", task.status, status)
             task.status = status
@@ -888,7 +900,13 @@ class TaskService:
         self.session.refresh(task)
         return task
 
-    def close_task(self, task_id: int, *, closed_on: dt.date | None = None) -> tuple[Task | None, Task | None]:
+    def close_task(
+        self,
+        task_id: int,
+        *,
+        closed_on: dt.date | None = None,
+        resolution: str | None = None,
+    ) -> tuple[Task | None, Task | None]:
         """Set closed, run on_close recurrence. Returns (closed_task, new_task_or_none)."""
         task = self.session.scalars(
             select(Task)
@@ -902,12 +920,18 @@ class TaskService:
         close_day = closed_on or dt.date.today()
         was_already_closed = task.status == TaskStatus.CLOSED
         if not was_already_closed:
+            if resolution is None or not str(resolution).strip():
+                raise ValueError("Resolution is required when closing a task.")
             old_status = task.status
             old_closed = task.closed_date
+            old_resolution = task.resolution
+            new_resolution = str(resolution).strip()
             task.status = TaskStatus.CLOSED
             task.closed_date = close_day
+            task.resolution = new_resolution
             _log_change(self.session, task.id, "status", old_status, TaskStatus.CLOSED)
             _log_change(self.session, task.id, "closed_date", old_closed, close_day)
+            _log_change(self.session, task.id, "resolution", old_resolution, new_resolution)
         refresh_next_milestone(self.session, task)
 
         new_task: Task | None = None
@@ -1052,13 +1076,20 @@ class TaskService:
         task_id: int,
         *,
         title: str,
+        resolution: str | None = None,
         milestone_date: dt.date | None = None,
     ) -> TodoItem | None:
         task = self.session.get(Task, task_id)
         if not task:
             return None
         order = max((t.sort_order for t in task.todos), default=-1) + 1
-        todo = TodoItem(task_id=task_id, sort_order=order, title=title.strip(), milestone_date=milestone_date)
+        todo = TodoItem(
+            task_id=task_id,
+            sort_order=order,
+            title=title.strip(),
+            resolution=(resolution.strip() if resolution is not None and resolution.strip() else None),
+            milestone_date=milestone_date,
+        )
         self.session.add(todo)
         refresh_next_milestone(self.session, task)
         self.session.commit()
@@ -1085,10 +1116,12 @@ class TaskService:
         self.session.commit()
         return True
 
-    def complete_todo(self, todo_id: int) -> None:
+    def complete_todo(self, todo_id: int, *, resolution: str | None = None) -> None:
         todo = self.session.get(TodoItem, todo_id)
         if not todo or todo.completed_at:
             return
+        if resolution is not None:
+            todo.resolution = resolution.strip() or None
         todo.completed_at = dt.datetime.now(dt.UTC)
         task = self.session.get(Task, todo.task_id)
         if task:
@@ -1104,6 +1137,7 @@ class TaskService:
         todo_id: int,
         *,
         title: str | None = None,
+        resolution: "str | None | object" = _UNSET,
         milestone_date: "dt.date | None | object" = _UNSET,
     ) -> TodoItem | None:
         """Edit a todo's title and/or milestone date.
@@ -1123,6 +1157,11 @@ class TaskService:
             stripped = title.strip()
             if stripped and stripped != todo.title:
                 todo.title = stripped
+                changed = True
+        if resolution is not _UNSET:
+            cleaned = None if resolution is None or not str(resolution).strip() else str(resolution).strip()
+            if cleaned != todo.resolution:
+                todo.resolution = cleaned
                 changed = True
         if milestone_date is not _UNSET and milestone_date != todo.milestone_date:
             todo.milestone_date = milestone_date  # type: ignore[assignment]

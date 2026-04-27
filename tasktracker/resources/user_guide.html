@@ -80,8 +80,8 @@ ul { padding-left: 1.2em; }
 
 <h2>Tasks</h2>
 <ul>
-<li><b>New Task</b> (title, received, due), <b>Save Task</b> (persist the detail form), <b>Close Task</b> (close + on-close recurrence if configured) — toolbar, <b>Task actions</b> row at the top of the detail pane, and shortcuts (defaults Ctrl+N, Ctrl+S, Ctrl+Shift+C; change under Settings).</li>
-<li><b>Two-column detail layout</b> — the core fields are split for readability: the <i>left</i> column (wider) holds Ticket, Title, a combined Status / Impact / Urgency / Priority row, and Description (which grows to fill available height); the <i>right</i> column holds Received, Due, Closed, Category, Sub-category, Area, For person, and Next milestone.</li>
+<li><b>New Task</b> (title, received, due), <b>Save Task</b> (persist the detail form), <b>Close Task</b> (close + on-close recurrence if configured) — toolbar, <b>Task actions</b> row at the top of the detail pane, and shortcuts (defaults Ctrl+N, Ctrl+S, Ctrl+Shift+C; change under Settings). Closing now requires a task resolution note.</li>
+<li><b>Two-column detail layout</b> — the core fields are split for readability: the <i>left</i> column (wider) holds Ticket, Title, a combined Status / Impact / Urgency / Priority row, Description, and a task <b>Resolution</b> note; the <i>right</i> column holds Received, Due, Closed, Category, Sub-category, Area, For person, and Next milestone.</li>
 <li><b>Inline sections vs. tabs</b> — below the core fields, <b>Todos</b>, <b>Blockers</b>, <b>Recurring</b>, and <b>Attachments</b> stay visible inline as stacked group boxes by default; <b>Notes</b> and <b>Activity</b> share a tab strip that fills the remaining vertical space, so long histories or rich notes no longer push everything else off-screen. You can reorder both groups under <b>Settings → Customize task panel layout…</b>.</li>
 <li><b>Blank dates</b> — Due and Closed date boxes stay blank until you set them; use the <b>Today</b> button to fill with today's date or <b>Clear</b> to empty them again. A blank date saves as "no date" (it does not default to today).</li>
 <li><b>Category / Sub-category / Area</b> — choose vault-specific taxonomy values for each task (Area is the task-level assignment; category/sub-category reflect that hierarchy).</li>
@@ -94,14 +94,16 @@ ul { padding-left: 1.2em; }
   <li><b>Blocked</b>, <b>On hold</b>, <b>Cancelled</b>, <b>Closed</b> — as the labels suggest; see <b>Blockers</b> for how blocking interacts with status.</li>
   </ul>
   The app does not auto-flip between <b>Open</b> and <b>In progress</b>; you set status when you save the task (except clearing the last blocker may move status off <code>blocked</code>). Finer rules can be added later.</li>
+<li><b>Resolution required on close</b> — when status transitions to <b>Closed</b>, enter a short final resolution note. The app blocks close actions (including the Close Task shortcut/button) until a resolution is provided.</li>
 <li><b>Next milestone</b> — derived from the first <i>open</i> todo (in list order) that has a milestone date.</li>
 </ul>
 
 <h2>Todos</h2>
 <ul>
 <li>Ordered list; <b>Up / Down</b> reorders. Completing todos refreshes next milestone.</li>
+<li><b>Resolution</b> — each todo can carry an optional resolution note. If missing, marking the todo done prompts for one first.</li>
 <li>Optional <b>milestone date</b> per todo. When adding or editing, tick <b>Milestone date</b> to set one, or untick to clear it.</li>
-<li><b>Edit a todo</b> — select it and click <b>Edit…</b>, or double-click the row. You can change the title and set / change / clear the milestone; an empty title is ignored (the original title is kept). The parent task's Next milestone updates automatically when the first open todo's milestone changes.</li>
+<li><b>Edit a todo</b> — select it and click <b>Edit…</b>, or double-click the row. You can change the title, resolution, and set / change / clear the milestone; an empty title is ignored (the original title is kept). The parent task's Next milestone updates automatically when the first open todo's milestone changes.</li>
 </ul>
 
 <h2>Notes</h2>
@@ -143,7 +145,7 @@ ul { padding-left: 1.2em; }
 </ul>
 <h3>Editing a task from the Calendar tab</h3>
 <ul>
-<li><b>Double-click</b> any event in the day list (or highlight it and click <b>Edit selected task…</b>) to open a focused <i>quick-edit</i> dialog. The dialog covers the fields you usually tweak from a calendar view: <b>Status</b>, <b>Due</b>, <b>Closed</b>, <b>Impact</b> / <b>Urgency</b> (with a live priority readout), <b>For person</b>, and <b>Area</b>. Flipping status to <b>Closed</b> from here spawns the next recurring instance just like closing from the Tasks tab.</li>
+<li><b>Double-click</b> any event in the day list (or highlight it and click <b>Edit selected task…</b>) to open a focused <i>quick-edit</i> dialog. The dialog covers the fields you usually tweak from a calendar view: <b>Status</b>, <b>Due</b>, <b>Closed</b>, <b>Resolution</b>, <b>Impact</b> / <b>Urgency</b> (with a live priority readout), <b>For person</b>, and <b>Area</b>. Flipping status to <b>Closed</b> from here spawns the next recurring instance just like closing from the Tasks tab, and requires a resolution note.</li>
 <li><b>Todos / milestones inside the dialog</b> — the same quick-edit dialog also embeds the task's todo list so you don't have to switch back to the Tasks tab just to shuffle a milestone. Use <b>Add…</b>, <b>Edit…</b>, <b>Mark done</b>, or <b>Delete</b>; double-click a row to edit it. The <b>Shift selected: N day(s) / Business days / Apply to selection</b> strip above the table shifts <i>only</i> the highlighted rows by the given number of days (business days skips weekends and configured holidays).</li>
 <li><b>Also shift todo milestones</b> — tick the checkbox below the core fields and every attached todo milestone is shifted by the same number of days you just changed the task's Due date by, using business-day math when the <b>Business days</b> sub-toggle is on. Leave the box unticked to move only the task's Due date and leave milestones alone.</li>
 <li><b>Notes snapshot</b> — the lower half of the dialog shows the task's notes (most recent first) as a short read-only list with a snippet. Double-click a line to pop open a read-only viewer with the full content. Editing notes still lives on the Tasks-tab editor — the calendar dialog is a reschedule-oriented surface.</li>

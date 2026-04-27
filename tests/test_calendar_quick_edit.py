@@ -62,6 +62,7 @@ def test_quick_edit_close_spawns_recurring_successor(
     idx = dlg.f_status.findData(TaskStatus.CLOSED.value)
     assert idx >= 0
     dlg.f_status.setCurrentIndex(idx)
+    dlg.f_resolution.setPlainText("Resolved in quick edit")
     dlg._on_save()
 
     assert dlg.saved is True

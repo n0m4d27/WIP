@@ -1,6 +1,5 @@
 # Local app data (encrypted DB, auth salts — do not commit)
 app_data/
-vault_two/
 
 __pycache__/
 *.py[cod]

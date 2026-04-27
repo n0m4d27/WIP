@@ -187,7 +187,7 @@ def test_preview_slip_excludes_closed_tasks_by_default(
 ) -> None:
     open_t = _seed_task_with_todos(svc, title="Open", due=dt.date(2026, 5, 12))
     closed_t = _seed_task_with_todos(svc, title="Closed", due=dt.date(2026, 5, 14))
-    svc.close_task(closed_t.id, closed_on=dt.date(2026, 5, 14))
+    svc.close_task(closed_t.id, closed_on=dt.date(2026, 5, 14), resolution="Closed after shift")
     plan = shift.preview_slip_from_date(dt.date(2026, 5, 1), 2)
     ids = {r.id for r in plan.rows if r.entity_type == "task"}
     assert open_t.id in ids

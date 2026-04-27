@@ -72,7 +72,7 @@ def test_overdue_ignores_closed_and_cancelled(svc: TaskService) -> None:
     open_task = _make_task(svc, "open overdue", due=today - dt.timedelta(days=3))
     closed = _make_task(svc, "closed overdue", due=today - dt.timedelta(days=3))
     cancelled = _make_task(svc, "cancelled overdue", due=today - dt.timedelta(days=3))
-    svc.close_task(closed.id, closed_on=today)
+    svc.close_task(closed.id, closed_on=today, resolution="Done")
     svc.update_task_fields(cancelled.id, status=TaskStatus.CANCELLED)
 
     sections = svc.dashboard_sections(as_of=today)
