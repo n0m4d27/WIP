@@ -122,6 +122,12 @@ from tasktracker.ui.settings_store import (
 )
 from tasktracker.ui.dashboard import DASHBOARD_CARD_META, DashboardWidget
 from tasktracker.ui.saved_views import SavedViewsWidget
+from tasktracker.ui.dependencies_panel import DependenciesPanel
+from tasktracker.ui.dependency_picker_dialog import (
+    DependencyCandidate,
+    run_dependency_picker_dialog,
+)
+from tasktracker.ui.tags_dialog import run_manage_tags_dialog
 from tasktracker.ui.text_scale import apply_app_text_scale, propagate_font_to_widget_tree
 from tasktracker.ui.themes import apply_theme, calendar_event_colors, list_themes
 from tasktracker.ui.task_panel_layout_dialog import run_task_panel_layout_dialog
@@ -560,6 +566,12 @@ class MainWindow(QMainWindow):
     def _open_task_templates_dialog(self) -> None:
         run_manage_task_templates_dialog(self, self._svc, self._ui_settings)
 
+    def _open_manage_tags(self) -> None:
+        run_manage_tags_dialog(self, self._svc)
+        self._reload_tag_choices()
+        self._load_task_detail()
+        self._reload_task_list()
+
     def _export_reference_data(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -596,6 +608,27 @@ class MainWindow(QMainWindow):
             f"Areas: {summary['areas']}\n"
             f"People: {summary['people']}",
         )
+
+    def _export_tags(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export tags", "", "JSON (*.json)")
+        if not path:
+            return
+        self._svc.export_tags(Path(path))
+        self._notify("Tags exported.")
+
+    def _import_tags(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import tags", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            summary = self._svc.import_tags(Path(path))
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            QMessageBox.warning(self, "Tags", f"Import failed: {exc}")
+            return
+        self._reload_tag_choices()
+        self._load_task_detail()
+        self._reload_task_list()
+        self._notify(f"Tags import complete: {summary['created']} created, {summary['merged']} merged.")
 
     def _switch_vault(self) -> None:
         """Confirm and relaunch the app with the vault picker.
@@ -700,8 +733,11 @@ class MainWindow(QMainWindow):
         m_settings.addAction("Manage categories and people…", self._open_reference_data_manager)
         m_settings.addAction("Export categories and people…", self._export_reference_data)
         m_settings.addAction("Import categories and people…", self._import_reference_data)
+        m_settings.addAction("Export tags…", self._export_tags)
+        m_settings.addAction("Import tags…", self._import_tags)
         m_settings.addSeparator()
         m_settings.addAction("Task templates…", self._open_task_templates_dialog)
+        m_settings.addAction("Manage tags…", self._open_manage_tags)
         m_settings.addSeparator()
         m_settings.addAction("Switch vault…", self._switch_vault)
 
@@ -803,6 +839,14 @@ class MainWindow(QMainWindow):
         self.chk_hide_closed.toggled.connect(self._reload_task_list)
         ll.addWidget(self.chk_hide_closed)
 
+        tag_filter_row = QHBoxLayout()
+        tag_filter_row.addWidget(QLabel("Tag filter"))
+        self.filter_tag = QComboBox()
+        self.filter_tag.addItem("All tags", None)
+        self.filter_tag.currentIndexChanged.connect(self._reload_task_list)
+        tag_filter_row.addWidget(self.filter_tag, 1)
+        ll.addLayout(tag_filter_row)
+
         self.saved_views = SavedViewsWidget()
         self.saved_views.view_applied.connect(self._apply_saved_view)
         self.saved_views.save_requested.connect(self._save_current_filters_as_view)
@@ -811,6 +855,7 @@ class MainWindow(QMainWindow):
         self.saved_views.move_requested.connect(self._move_saved_view)
         ll.addWidget(self.saved_views)
         self._refresh_saved_views_sidebar()
+        self._reload_tag_choices()
 
         self.task_list = QListWidget()
         self.task_list.setSelectionMode(
@@ -923,6 +968,25 @@ class MainWindow(QMainWindow):
         left_form.addRow("Status / I / U / P", status_row)
         left_form.addRow("Description", self.f_description)
         left_form.addRow("Resolution", self.f_resolution)
+        tag_row = QWidget()
+        tag_row_lay = QVBoxLayout(tag_row)
+        tag_row_lay.setContentsMargins(0, 0, 0, 0)
+        self.task_tags_list = QListWidget()
+        self.task_tags_list.setMaximumHeight(84)
+        tag_row_lay.addWidget(self.task_tags_list)
+        tag_btn_lay = QHBoxLayout()
+        self.btn_tag_add = QPushButton("Add tag…")
+        self.btn_tag_add.clicked.connect(self._add_tag_to_current_task)
+        tag_btn_lay.addWidget(self.btn_tag_add)
+        self.btn_tag_remove = QPushButton("Remove")
+        self.btn_tag_remove.clicked.connect(self._remove_tag_from_current_task)
+        tag_btn_lay.addWidget(self.btn_tag_remove)
+        self.btn_tag_manage = QPushButton("Manage tags…")
+        self.btn_tag_manage.clicked.connect(self._open_manage_tags)
+        tag_btn_lay.addWidget(self.btn_tag_manage)
+        tag_btn_lay.addStretch(1)
+        tag_row_lay.addLayout(tag_btn_lay)
+        left_form.addRow("Tags", tag_row)
 
         right_col = QWidget()
         right_form = QFormLayout(right_col)
@@ -967,6 +1031,12 @@ class MainWindow(QMainWindow):
         t_btn.addWidget(self.btn_todo_dn)
         todo_l.addLayout(t_btn)
         self._section_by_id["todos"] = todo_box
+
+        self.dependencies_panel = DependenciesPanel()
+        self.dependencies_panel.add_requested.connect(self._add_dependency_from_panel)
+        self.dependencies_panel.remove_requested.connect(self._remove_dependency_from_panel)
+        self.dependencies_panel.jump_to_task_requested.connect(self._jump_to_task_in_tasks_tab)
+        self._section_by_id["dependencies"] = self.dependencies_panel
 
         note_box = QGroupBox("Notes (rich text)")
         note_l = QVBoxLayout(note_box)
@@ -1524,6 +1594,26 @@ class MainWindow(QMainWindow):
         }
         return {k for k, w in m.items() if w.isChecked()}
 
+    def _current_tag_filter_id(self) -> int | None:
+        if not hasattr(self, "filter_tag"):
+            return None
+        raw = self.filter_tag.currentData()
+        return int(raw) if raw is not None else None
+
+    def _reload_tag_choices(self) -> None:
+        if not hasattr(self, "filter_tag"):
+            return
+        keep = self._current_tag_filter_id()
+        self.filter_tag.blockSignals(True)
+        self.filter_tag.clear()
+        self.filter_tag.addItem("All tags", None)
+        for tag in self._svc.list_tags():
+            self.filter_tag.addItem(tag.name, tag.id)
+        if keep is not None:
+            idx = self.filter_tag.findData(keep)
+            self.filter_tag.setCurrentIndex(idx if idx >= 0 else 0)
+        self.filter_tag.blockSignals(False)
+
     @staticmethod
     def _combo_current_int(combo: QComboBox) -> int | None:
         raw = combo.currentData()
@@ -1601,18 +1691,21 @@ class MainWindow(QMainWindow):
 
     def _tasks_for_sidebar(self):
         include_closed = not self.chk_hide_closed.isChecked()
+        tag_id = self._current_tag_filter_id()
         q = self.search_edit.text().strip()
         self._task_search_snippets.clear()
         if q:
             fields = self._search_field_names()
             if not fields:
                 fields = {"title"}
-            hits = self._svc.search_tasks(q, fields=fields, include_closed=include_closed)
+            hits = self._svc.search_tasks(
+                q, fields=fields, include_closed=include_closed, tag_id=tag_id
+            )
             for h in hits:
                 if h.snippet:
                     self._task_search_snippets[h.task.id] = h.snippet
             return [h.task for h in hits]
-        return self._svc.list_tasks(include_closed=include_closed)
+        return self._svc.list_tasks(include_closed=include_closed, tag_id=tag_id)
 
     def _clear_search(self) -> None:
         self.search_edit.clear()
@@ -1675,6 +1768,7 @@ class MainWindow(QMainWindow):
             "search_text": self.search_edit.text(),
             "search_fields": fields,
             "hide_closed": bool(self.chk_hide_closed.isChecked()),
+            "tag_id": self._current_tag_filter_id(),
         }
 
     def _apply_filter_state(self, state: dict[str, object]) -> None:
@@ -1687,6 +1781,7 @@ class MainWindow(QMainWindow):
         # Temporarily suppress the hide_closed reload side effect so we
         # don't trigger two back-to-back list rebuilds.
         self.chk_hide_closed.blockSignals(True)
+        self.filter_tag.blockSignals(True)
         try:
             hide_closed = state.get("hide_closed")
             if isinstance(hide_closed, bool):
@@ -1708,8 +1803,15 @@ class MainWindow(QMainWindow):
                 }
                 for name, widget in field_widgets.items():
                     widget.setChecked(name in wanted)
+            tag_id = state.get("tag_id")
+            if tag_id is None:
+                self.filter_tag.setCurrentIndex(0)
+            elif isinstance(tag_id, int):
+                idx = self.filter_tag.findData(tag_id)
+                self.filter_tag.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             self.chk_hide_closed.blockSignals(False)
+            self.filter_tag.blockSignals(False)
         self._reload_task_list()
 
     def _apply_dashboard_filter(self, card_id: str) -> None:
@@ -1882,7 +1984,8 @@ class MainWindow(QMainWindow):
                 pr = priority_display(t.priority)
                 due = fmt_date(t.due_date, fmt) if t.due_date else "no due"
                 tk = format_task_ticket(t.ticket_number)
-                self.task_list.addItem(f"{tk} [{pr}] {t.title} — {due} ({t.status})")
+                dep_flag = " ⛓" if self._svc.has_open_upstream_dependency(t.id) else ""
+                self.task_list.addItem(f"{tk} [{pr}] {t.title}{dep_flag} — {due} ({t.status})")
                 it = self.task_list.item(self.task_list.count() - 1)
                 it.setData(Qt.ItemDataRole.UserRole, t.id)
                 snip = self._task_search_snippets.get(t.id)
@@ -1890,7 +1993,7 @@ class MainWindow(QMainWindow):
                     tip = snip.replace("**", "")
                     it.setToolTip(tip)
                 else:
-                    it.setToolTip("")
+                    it.setToolTip("Blocked by open dependency" if dep_flag else "")
             if saved_id is not None:
                 for i in range(self.task_list.count()):
                     it = self.task_list.item(i)
@@ -1920,6 +2023,7 @@ class MainWindow(QMainWindow):
         self.lbl_ticket.setText("—")
         self.f_title.clear()
         self.f_description.clear()
+        self.task_tags_list.clear()
         self.f_resolution.clear()
         self.todo_list.clear()
         self.note_list.clear()
@@ -1931,6 +2035,8 @@ class MainWindow(QMainWindow):
         self.lbl_next_ms.setText("—")
         self._reload_task_taxonomy_inputs()
         self._attachments_section.refresh(None)
+        if hasattr(self, "dependencies_panel"):
+            self.dependencies_panel.set_data([], [])
 
     def _on_task_selected(
         self, cur: QListWidgetItem | None, prev: QListWidgetItem | None
@@ -2000,6 +2106,17 @@ class MainWindow(QMainWindow):
             it.setData(Qt.ItemDataRole.UserRole, td.id)
             if td.resolution:
                 it.setToolTip(f"Resolution: {td.resolution}")
+
+        self.task_tags_list.clear()
+        for tag in sorted(task.tags, key=lambda x: x.name.lower()):
+            it = QListWidgetItem(tag.name)
+            it.setData(Qt.ItemDataRole.UserRole, tag.id)
+            if tag.color_hint:
+                it.setToolTip(f"Color hint: {tag.color_hint}")
+            self.task_tags_list.addItem(it)
+
+        upstream, downstream = self._svc.list_dependencies(task.id)
+        self.dependencies_panel.set_data(upstream, downstream)
 
         self.note_list.clear()
         for n in sorted(task.notes, key=lambda x: x.created_at):
@@ -2320,6 +2437,77 @@ class MainWindow(QMainWindow):
         self._reload_task_list()
         if created is not None:
             self._select_list_item_by_id(self.todo_list, created.id)
+
+    def _add_tag_to_current_task(self) -> None:
+        if self._current_task_id is None:
+            return
+        tags = self._svc.list_tags()
+        if not tags:
+            self._notify("No tags yet. Use Manage tags… first.")
+            return
+        names = [t.name for t in tags]
+        chosen, ok = QInputDialog.getItem(self, "Add tag", "Tag:", names, 0, False)
+        if not ok:
+            return
+        tag = next((t for t in tags if t.name == chosen), None)
+        if tag is None:
+            return
+        self._svc.attach_tag_to_task(self._current_task_id, tag.id)
+        self._load_task_detail()
+        self._reload_task_list()
+
+    def _remove_tag_from_current_task(self) -> None:
+        if self._current_task_id is None:
+            return
+        it = self.task_tags_list.currentItem()
+        if it is None:
+            return
+        tag_id = it.data(Qt.ItemDataRole.UserRole)
+        if tag_id is None:
+            return
+        self._svc.detach_tag_from_task(self._current_task_id, int(tag_id))
+        self._load_task_detail()
+        self._reload_task_list()
+
+    def _add_dependency_from_panel(self) -> None:
+        if self._current_task_id is None:
+            return
+        current_id = self._current_task_id
+        include_closed = not self.chk_hide_closed.isChecked()
+        upstream, _ = self._svc.list_dependencies(current_id)
+        already_linked = {int(dep.blocker_task_id) for dep in upstream}
+        candidates = [
+            DependencyCandidate(
+                task_id=int(t.id),
+                ticket_number=t.ticket_number,
+                title=t.title,
+                status=t.status,
+            )
+            for t in self._svc.list_tasks(include_closed=include_closed)
+            if int(t.id) != current_id and int(t.id) not in already_linked
+        ]
+        if not candidates:
+            self._notify("No open tasks available to add as blockers.")
+            return
+        blocker_id = run_dependency_picker_dialog(self, candidates=candidates)
+        if blocker_id is None:
+            return
+        note, _ok_note = QInputDialog.getText(self, "Dependency note", "Note (optional):")
+        try:
+            dep = self._svc.add_dependency(blocker_id, current_id, note=note)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Dependencies", str(exc))
+            return
+        if dep is None:
+            self._notify("Could not create dependency.")
+            return
+        self._load_task_detail()
+        self._reload_task_list()
+
+    def _remove_dependency_from_panel(self, dependency_id: int) -> None:
+        if self._svc.remove_dependency(dependency_id):
+            self._load_task_detail()
+            self._reload_task_list()
 
     def _complete_todo(self) -> None:
         it = self.todo_list.currentItem()

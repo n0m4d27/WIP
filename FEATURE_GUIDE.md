@@ -142,6 +142,13 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 
 ---
 
+## Tags and dependencies
+
+- **Tags:** Free-form labels that cut across category/area routing. Manage under Settings, attach from task detail, and filter in the Tasks tab.
+- **Dependencies:** Explicit task links (`blocked by` / `blocking`) with cycle protection; open upstream dependencies show a list indicator and can be jumped to from task detail.
+
+---
+
 ## Calendar
 
 - Tab showing tasks on dates: due, milestone, received, closed overlays.

@@ -24,7 +24,14 @@ indicators so a parent reflects the state of its children at a glance.
   - `Children closed / total`
   - Badge if any child is overdue or blocked.
 - Parent selection picker (search / filter over existing tasks; excludes
-  descendants to prevent cycles).
+  descendants to prevent cycles) using the same scalable pattern established
+  by plans 06 and 06-01:
+  - dedicated searchable picker dialog rather than a plain dropdown
+  - case-insensitive matching on task title and ticket text (`T123`, `123`)
+  - candidate pruning for invalid choices before display
+  - respects the Tasks-tab closed-task visibility toggle in the same way the
+    dependency picker does, so closed tasks can be included when the user has
+    chosen to show them
 - Close-task interaction: closing a parent does **not** cascade to children.
   It surfaces a gentle warning if any children are still open, so the user
   decides explicitly.
@@ -51,10 +58,13 @@ indicators so a parent reflects the state of its children at a glance.
 - `tasktracker/db/schema_upgrade.py` — add column + index.
 - `tasktracker/services/task_service.py` — set / clear parent with depth and
   cycle guards; `list_children(task_id)`; rollup helpers
-  (`children_summary(task_id) -> dict`).
+  (`children_summary(task_id) -> dict`); candidate-shaping helper for the
+  parent picker if needed.
 - `tasktracker/services/reporting_service.py` — when "group by parent" is
   meaningful, expose it.
 - New widget `tasktracker/ui/children_panel.py` — parent's children table.
+- New dialog `tasktracker/ui/parent_picker_dialog.py` — searchable parent-task
+  selector, matching the picker UX introduced for dependencies in plan 06-01.
 - `tasktracker/ui/main_window.py` — list column / badge for rollup; parent
   picker.
 - `tests/test_parent_child.py` (new).
@@ -65,7 +75,14 @@ indicators so a parent reflects the state of its children at a glance.
 - [ ] Service methods: `set_parent`, `clear_parent`, `list_children`,
       `children_summary`.
 - [ ] Enforce depth <= 2 and no cycles.
-- [ ] Parent picker widget.
+- [ ] Parent picker widget using the searchable dialog pattern from plan
+      06-01.
+- [ ] Candidate rules for the picker:
+      - exclude the current task
+      - exclude descendants / any cycle-causing choice
+      - enforce depth <= 2 before the user can pick
+      - include or exclude closed tasks based on the same hide/show-closed
+        behavior the dependency picker follows
 - [ ] Children panel on task detail (inline or tab per layout placement).
 - [ ] Rollup badges on Tasks list rows.
 - [ ] Close-parent-with-open-children warning flow.
@@ -82,6 +99,11 @@ indicators so a parent reflects the state of its children at a glance.
       rejected.
 - [ ] Attempting to create a grandchild (A parent of B, B parent of C) is
       rejected with a clear error.
+- [ ] With many tasks (50+), the parent picker narrows correctly by title or
+      ticket text and remains usable.
+- [ ] Closed tasks appear in the parent picker only when the user has chosen
+      to show closed tasks in the Tasks-tab context, matching the behavior
+      built in plan 06-01.
 - [ ] Rollup badge on A shows "2 / 5 closed" when 2 of 5 children are
       closed; flips to overdue-flag when any open child is past due.
 - [ ] Closing a parent with open children surfaces the warning and does not
@@ -106,6 +128,9 @@ indicators so a parent reflects the state of its children at a glance.
   report definitions.
 - **List density.** Rollup badges on every row can add visual noise. Keep the
   badge compact and show it only when a task actually has children.
+- **Picker scale.** A plain combo box will break down quickly with dozens of
+  tasks. Reuse the searchable picker interaction from plan 06-01 instead of
+  inventing a second, inconsistent selection UX.
 - **Existing data migration.** Pre-plan vaults have no parents; the column
   defaults to NULL. No data migration beyond the upgrade itself.
 

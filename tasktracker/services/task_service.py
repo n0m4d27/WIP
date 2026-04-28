@@ -12,6 +12,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 from sqlalchemy import Select, exists, func, or_, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -25,10 +26,12 @@ from tasktracker.db.models import (
     Task,
     TaskAttachment,
     TaskBlocker,
+    TaskDependency,
     TaskNote,
     TaskNoteVersion,
     TaskPerson,
     TaskSubCategory,
+    Tag,
     TaskTemplate,
     TaskTemplateTodo,
     TaskUpdateLog,
@@ -441,6 +444,234 @@ class TaskService:
         self.vault_root = Path(vault_root).resolve() if vault_root is not None else None
 
     @staticmethod
+    def _slugify_tag(name: str) -> str:
+        base = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+        return base or quote(name.strip().lower())[:80] or "tag"
+
+    def _next_unique_tag_slug(self, desired: str, *, exclude_tag_id: int | None = None) -> str:
+        slug = desired
+        n = 2
+        while True:
+            q = select(Tag).where(Tag.slug == slug)
+            if exclude_tag_id is not None:
+                q = q.where(Tag.id != exclude_tag_id)
+            if self.session.scalar(q) is None:
+                return slug
+            slug = f"{desired}-{n}"
+            n += 1
+
+    def list_tags(self) -> list[Tag]:
+        return list(self.session.scalars(select(Tag).order_by(Tag.name)).all())
+
+    def create_tag(self, name: str, *, color_hint: str | None = None) -> Tag | None:
+        nm = name.strip()
+        if not nm:
+            return None
+        if self.session.scalar(select(Tag).where(Tag.name == nm)):
+            return None
+        desired = self._slugify_tag(nm)
+        slug = self._next_unique_tag_slug(desired)
+        row = Tag(name=nm, slug=slug, color_hint=(color_hint.strip() if color_hint else None))
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
+    def rename_tag(self, tag_id: int, name: str) -> Tag | None:
+        row = self.session.get(Tag, tag_id)
+        nm = name.strip()
+        if row is None or not nm:
+            return None
+        if nm != row.name and self.session.scalar(select(Tag).where(Tag.name == nm, Tag.id != tag_id)):
+            return None
+        row.name = nm
+        row.slug = self._next_unique_tag_slug(self._slugify_tag(nm), exclude_tag_id=tag_id)
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
+    def update_tag(self, tag_id: int, *, color_hint: str | None = None) -> Tag | None:
+        row = self.session.get(Tag, tag_id)
+        if row is None:
+            return None
+        row.color_hint = color_hint.strip() if color_hint else None
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
+    def delete_tag(self, tag_id: int) -> bool:
+        row = self.session.get(Tag, tag_id)
+        if row is None:
+            return False
+        self.session.delete(row)
+        self.session.commit()
+        return True
+
+    def merge_tags(self, source_tag_id: int, target_tag_id: int) -> bool:
+        if source_tag_id == target_tag_id:
+            return False
+        source = self.session.get(Tag, source_tag_id)
+        target = self.session.get(Tag, target_tag_id)
+        if source is None or target is None:
+            return False
+        src_tasks = self.session.scalars(select(Task).join(Task.tags).where(Tag.id == source.id)).all()
+        for t in src_tasks:
+            if target not in t.tags:
+                t.tags.append(target)
+            if source in t.tags:
+                t.tags.remove(source)
+        self.session.delete(source)
+        self.session.commit()
+        return True
+
+    def set_task_tags(self, task_id: int, tag_ids: list[int]) -> bool:
+        task = self.session.get(Task, task_id)
+        if task is None:
+            return False
+        rows = self.session.scalars(select(Tag).where(Tag.id.in_(tag_ids))).all() if tag_ids else []
+        task.tags = sorted(rows, key=lambda x: x.name.lower())
+        self.session.commit()
+        return True
+
+    def attach_tag_to_task(self, task_id: int, tag_id: int) -> bool:
+        task = self.session.get(Task, task_id)
+        tag = self.session.get(Tag, tag_id)
+        if task is None or tag is None:
+            return False
+        if tag not in task.tags:
+            task.tags.append(tag)
+            self.session.commit()
+        return True
+
+    def detach_tag_from_task(self, task_id: int, tag_id: int) -> bool:
+        task = self.session.get(Task, task_id)
+        tag = self.session.get(Tag, tag_id)
+        if task is None or tag is None:
+            return False
+        if tag in task.tags:
+            task.tags.remove(tag)
+            self.session.commit()
+        return True
+
+    def export_tags(self, path: Path) -> None:
+        payload = {
+            "version": 1,
+            "tags": [
+                {"name": t.name, "slug": t.slug, "color_hint": t.color_hint}
+                for t in self.list_tags()
+            ],
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def import_tags(self, path: Path) -> dict[str, int]:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        rows = raw.get("tags", []) if isinstance(raw, dict) else []
+        created = 0
+        merged = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name", "")).strip()
+            if not name:
+                continue
+            color = row.get("color_hint")
+            existing = self.session.scalar(select(Tag).where(Tag.name == name))
+            if existing is None:
+                if self.create_tag(name, color_hint=str(color) if color is not None else None):
+                    created += 1
+            else:
+                existing.color_hint = str(color).strip() if color is not None and str(color).strip() else existing.color_hint
+                merged += 1
+        self.session.commit()
+        return {"created": created, "merged": merged}
+
+    def _dependency_reachable(self, start_id: int, target_id: int) -> bool:
+        if start_id == target_id:
+            return True
+        seen: set[int] = set()
+        stack = [start_id]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            nxt = self.session.scalars(
+                select(TaskDependency.blocked_task_id).where(TaskDependency.blocker_task_id == cur)
+            ).all()
+            for nid in nxt:
+                if int(nid) == target_id:
+                    return True
+                stack.append(int(nid))
+        return False
+
+    def add_dependency(
+        self, blocker_task_id: int, blocked_task_id: int, *, note: str | None = None
+    ) -> TaskDependency | None:
+        if blocker_task_id == blocked_task_id:
+            raise ValueError("A task cannot depend on itself.")
+        if self.session.get(Task, blocker_task_id) is None or self.session.get(Task, blocked_task_id) is None:
+            return None
+        existing = self.session.scalar(
+            select(TaskDependency).where(
+                TaskDependency.blocker_task_id == blocker_task_id,
+                TaskDependency.blocked_task_id == blocked_task_id,
+            )
+        )
+        if existing is not None:
+            return existing
+        # New edge blocker->blocked must not make a cycle.
+        if self._dependency_reachable(blocked_task_id, blocker_task_id):
+            raise ValueError("Dependency cycle detected.")
+        row = TaskDependency(
+            blocker_task_id=blocker_task_id,
+            blocked_task_id=blocked_task_id,
+            note=note.strip() if note and note.strip() else None,
+        )
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+        return row
+
+    def remove_dependency(self, dependency_id: int) -> bool:
+        row = self.session.get(TaskDependency, dependency_id)
+        if row is None:
+            return False
+        self.session.delete(row)
+        self.session.commit()
+        return True
+
+    def list_dependencies(self, task_id: int) -> tuple[list[TaskDependency], list[TaskDependency]]:
+        upstream = list(
+            self.session.scalars(
+                select(TaskDependency)
+                .where(TaskDependency.blocked_task_id == task_id)
+                .options(selectinload(TaskDependency.blocker_task))
+                .order_by(TaskDependency.created_at)
+            ).all()
+        )
+        downstream = list(
+            self.session.scalars(
+                select(TaskDependency)
+                .where(TaskDependency.blocker_task_id == task_id)
+                .options(selectinload(TaskDependency.blocked_task))
+                .order_by(TaskDependency.created_at)
+            ).all()
+        )
+        return upstream, downstream
+
+    def has_open_upstream_dependency(self, task_id: int) -> bool:
+        rows = self.session.scalars(
+            select(TaskDependency)
+            .where(TaskDependency.blocked_task_id == task_id)
+            .options(selectinload(TaskDependency.blocker_task))
+        ).all()
+        for dep in rows:
+            if dep.blocker_task.status != TaskStatus.CLOSED:
+                return True
+        return False
+
+    @staticmethod
     def _safe_attachment_filename(orig: str) -> str:
         name = Path(orig).name.strip()
         if not name or name in (".", ".."):
@@ -559,9 +790,11 @@ class TaskService:
         *,
         include_closed: bool = True,
         status: str | None = None,
+        tag_id: int | None = None,
     ) -> list[Task]:
         q: Select[tuple[Task]] = select(Task).options(
             selectinload(Task.todos),
+            selectinload(Task.tags),
             selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
             selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),
             selectinload(Task.person),
@@ -570,6 +803,8 @@ class TaskService:
             q = q.where(Task.status != TaskStatus.CLOSED)
         if status:
             q = q.where(Task.status == status)
+        if tag_id is not None:
+            q = q.join(Task.tags).where(Tag.id == tag_id)
         # Due dates present first, then by due date, priority, title
         q = q.order_by(Task.ticket_number.is_(None), Task.ticket_number, Task.due_date.is_(None), Task.due_date, Task.priority, Task.title)
         return list(self.session.scalars(q).unique().all())
@@ -623,6 +858,7 @@ class TaskService:
         *,
         fields: set[str],
         include_closed: bool = True,
+        tag_id: int | None = None,
     ) -> list[TaskSearchHit]:
         raw = needle.strip()
         if not raw:
@@ -712,6 +948,7 @@ class TaskService:
             .where(or_(*conds))
             .options(
                 selectinload(Task.todos),
+                selectinload(Task.tags),
                 selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
                 selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),
                 selectinload(Task.person),
@@ -720,6 +957,8 @@ class TaskService:
         )
         if not include_closed:
             q = q.where(Task.status != TaskStatus.CLOSED)
+        if tag_id is not None:
+            q = q.join(Task.tags).where(Tag.id == tag_id)
         q = q.order_by(
             Task.ticket_number.is_(None),
             Task.ticket_number,
@@ -738,8 +977,11 @@ class TaskService:
             .where(Task.id == task_id)
             .options(
                 selectinload(Task.todos),
+                selectinload(Task.tags),
                 selectinload(Task.notes).selectinload(TaskNote.versions),
                 selectinload(Task.blockers),
+                selectinload(Task.dependencies_incoming).selectinload(TaskDependency.blocker_task),
+                selectinload(Task.dependencies_outgoing).selectinload(TaskDependency.blocked_task),
                 selectinload(Task.attachments),
                 selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
                 selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),

@@ -150,6 +150,60 @@ def upgrade_schema(engine: Engine) -> None:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_task_attachments_task_id ON task_attachments(task_id)")
         )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS tags (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(120) NOT NULL UNIQUE,
+                    slug VARCHAR(140) NOT NULL UNIQUE,
+                    color_hint VARCHAR(32),
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tags_name ON tags(name)"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tags_slug ON tags(slug)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS task_tags (
+                    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                    PRIMARY KEY (task_id, tag_id)
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_tags_task_id ON task_tags(task_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_tags_tag_id ON task_tags(tag_id)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS task_dependencies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    blocker_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    blocked_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    note TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_task_dependencies_pair UNIQUE (blocker_task_id, blocked_task_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_task_dependencies_blocker_task_id "
+                "ON task_dependencies(blocker_task_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_task_dependencies_blocked_task_id "
+                "ON task_dependencies(blocked_task_id)"
+            )
+        )
         todo_rows = conn.execute(text("PRAGMA table_info(todo_items)")).fetchall()
         todo_col_names = {r[1] for r in todo_rows}
         if "resolution" not in todo_col_names:

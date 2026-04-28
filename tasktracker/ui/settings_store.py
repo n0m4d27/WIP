@@ -27,7 +27,7 @@ DEFAULT_TAB_ID: str = "dashboard"
 # settings file version so a future addition (e.g. tag filters from
 # plan 06) can be introduced with a forward-compatible bump without
 # disturbing other settings sections.
-SAVED_VIEW_SCHEMA_VERSION: int = 1
+SAVED_VIEW_SCHEMA_VERSION: int = 2
 
 # Upper bound on a saved-view name so the settings file can't be
 # inflated by a corrupt write. Matches the 200-char limit used by
@@ -37,6 +37,7 @@ _MAX_SAVED_VIEW_NAME_LEN: int = 200
 # Ordered section ids for the movable blocks below core task fields on the Tasks tab.
 TASK_SECTION_IDS: tuple[str, ...] = (
     "todos",
+    "dependencies",
     "notes",
     "blockers",
     "recurring",
@@ -46,6 +47,7 @@ TASK_SECTION_IDS: tuple[str, ...] = (
 
 TASK_SECTION_LABELS: dict[str, str] = {
     "todos": "Todos (ordered)",
+    "dependencies": "Dependencies",
     "notes": "Notes (rich text)",
     "blockers": "Blockers",
     "recurring": "Recurring (template todos for next instance)",
@@ -60,6 +62,7 @@ TASK_SECTION_LABELS: dict[str, str] = {
 # light sections off-screen.
 TASK_SECTION_PLACEMENT: dict[str, str] = {
     "todos": "inline",
+    "dependencies": "inline",
     "blockers": "inline",
     "recurring": "inline",
     "attachments": "inline",

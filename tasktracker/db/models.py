@@ -5,10 +5,12 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
+    Column,
     Date,
     DateTime,
     ForeignKey,
     Integer,
+    Table,
     String,
     Text,
     UniqueConstraint,
@@ -22,6 +24,14 @@ if TYPE_CHECKING:
 
 class Base(DeclarativeBase):
     pass
+
+
+task_tags = Table(
+    "task_tags",
+    Base.metadata,
+    Column("task_id", ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class Task(Base):
@@ -77,8 +87,68 @@ class Task(Base):
         cascade="all, delete-orphan",
         order_by="TaskAttachment.created_at",
     )
+    tags: Mapped[list["Tag"]] = relationship(
+        secondary=task_tags,
+        back_populates="tasks",
+        order_by="Tag.name",
+    )
+    dependencies_outgoing: Mapped[list["TaskDependency"]] = relationship(
+        back_populates="blocker_task",
+        cascade="all, delete-orphan",
+        foreign_keys="TaskDependency.blocker_task_id",
+    )
+    dependencies_incoming: Mapped[list["TaskDependency"]] = relationship(
+        back_populates="blocked_task",
+        cascade="all, delete-orphan",
+        foreign_keys="TaskDependency.blocked_task_id",
+    )
     area: Mapped["TaskArea | None"] = relationship(back_populates="tasks")
     person: Mapped["TaskPerson | None"] = relationship(back_populates="tasks")
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
+    slug: Mapped[str] = mapped_column(String(140), nullable=False, unique=True, index=True)
+    color_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    tasks: Mapped[list["Task"]] = relationship(
+        secondary=task_tags,
+        back_populates="tags",
+    )
+
+
+class TaskDependency(Base):
+    __tablename__ = "task_dependencies"
+    __table_args__ = (
+        UniqueConstraint("blocker_task_id", "blocked_task_id", name="uq_task_dependencies_pair"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    blocker_task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    blocked_task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    blocker_task: Mapped["Task"] = relationship(
+        back_populates="dependencies_outgoing",
+        foreign_keys=[blocker_task_id],
+    )
+    blocked_task: Mapped["Task"] = relationship(
+        back_populates="dependencies_incoming",
+        foreign_keys=[blocked_task_id],
+    )
 
 
 class TaskAttachment(Base):
