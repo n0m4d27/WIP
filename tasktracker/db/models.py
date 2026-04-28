@@ -53,6 +53,9 @@ class Task(Base):
     due_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
     closed_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
     next_milestone_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
+    parent_task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     area_id: Mapped[int | None] = mapped_column(
         ForeignKey("task_areas.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -101,6 +104,17 @@ class Task(Base):
         back_populates="blocked_task",
         cascade="all, delete-orphan",
         foreign_keys="TaskDependency.blocked_task_id",
+    )
+    parent_task: Mapped["Task | None"] = relationship(
+        "Task",
+        remote_side="Task.id",
+        back_populates="child_tasks",
+        foreign_keys=[parent_task_id],
+    )
+    child_tasks: Mapped[list["Task"]] = relationship(
+        "Task",
+        back_populates="parent_task",
+        foreign_keys="Task.parent_task_id",
     )
     area: Mapped["TaskArea | None"] = relationship(back_populates="tasks")
     person: Mapped["TaskPerson | None"] = relationship(back_populates="tasks")

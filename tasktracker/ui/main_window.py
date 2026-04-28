@@ -122,11 +122,13 @@ from tasktracker.ui.settings_store import (
 )
 from tasktracker.ui.dashboard import DASHBOARD_CARD_META, DashboardWidget
 from tasktracker.ui.saved_views import SavedViewsWidget
+from tasktracker.ui.children_panel import ChildrenPanel
 from tasktracker.ui.dependencies_panel import DependenciesPanel
 from tasktracker.ui.dependency_picker_dialog import (
     DependencyCandidate,
     run_dependency_picker_dialog,
 )
+from tasktracker.ui.parent_picker_dialog import ParentCandidate, run_parent_picker_dialog
 from tasktracker.ui.tags_dialog import run_manage_tags_dialog
 from tasktracker.ui.text_scale import apply_app_text_scale, propagate_font_to_widget_tree
 from tasktracker.ui.themes import apply_theme, calendar_event_colors, list_themes
@@ -958,6 +960,20 @@ class MainWindow(QMainWindow):
         self.f_category.currentIndexChanged.connect(self._on_category_combo_changed)
         self.f_subcategory.currentIndexChanged.connect(self._on_subcategory_combo_changed)
         self.lbl_next_ms = QLabel("—")
+        self.lbl_parent_task = QLabel("—")
+        parent_row = QWidget()
+        parent_row_lay = QHBoxLayout(parent_row)
+        parent_row_lay.setContentsMargins(0, 0, 0, 0)
+        parent_row_lay.addWidget(self.lbl_parent_task, 1)
+        self.btn_parent_set = QPushButton("Set parent…")
+        self.btn_parent_set.clicked.connect(self._set_parent_for_current_task)
+        parent_row_lay.addWidget(self.btn_parent_set)
+        self.btn_parent_clear = QPushButton("Clear")
+        self.btn_parent_clear.clicked.connect(self._clear_parent_for_current_task)
+        parent_row_lay.addWidget(self.btn_parent_clear)
+        self.btn_parent_jump = QPushButton("Jump")
+        self.btn_parent_jump.clicked.connect(self._jump_to_parent_task)
+        parent_row_lay.addWidget(self.btn_parent_jump)
 
         left_col = QWidget()
         left_form = QFormLayout(left_col)
@@ -999,6 +1015,7 @@ class MainWindow(QMainWindow):
         right_form.addRow("Sub-category", self.f_subcategory)
         right_form.addRow("Area", self.f_area)
         right_form.addRow("For person", self.f_person)
+        right_form.addRow("Parent", parent_row)
         right_form.addRow("Next milestone", self.lbl_next_ms)
 
         core_lay.addWidget(left_col, 2)
@@ -1037,6 +1054,10 @@ class MainWindow(QMainWindow):
         self.dependencies_panel.remove_requested.connect(self._remove_dependency_from_panel)
         self.dependencies_panel.jump_to_task_requested.connect(self._jump_to_task_in_tasks_tab)
         self._section_by_id["dependencies"] = self.dependencies_panel
+
+        self.children_panel = ChildrenPanel()
+        self.children_panel.jump_to_task_requested.connect(self._jump_to_task_in_tasks_tab)
+        self._section_by_id["children"] = self.children_panel
 
         note_box = QGroupBox("Notes (rich text)")
         note_l = QVBoxLayout(note_box)
@@ -1985,7 +2006,18 @@ class MainWindow(QMainWindow):
                 due = fmt_date(t.due_date, fmt) if t.due_date else "no due"
                 tk = format_task_ticket(t.ticket_number)
                 dep_flag = " ⛓" if self._svc.has_open_upstream_dependency(t.id) else ""
-                self.task_list.addItem(f"{tk} [{pr}] {t.title}{dep_flag} — {due} ({t.status})")
+                child_summary = self._svc.children_summary(t.id)
+                child_bits: list[str] = []
+                if child_summary.total:
+                    child_bits.append(f"{child_summary.closed}/{child_summary.total} children")
+                    if child_summary.has_overdue_open_child:
+                        child_bits.append("child overdue")
+                    if child_summary.has_blocked_open_child:
+                        child_bits.append("child blocked")
+                child_suffix = f" [{'; '.join(child_bits)}]" if child_bits else ""
+                self.task_list.addItem(
+                    f"{tk} [{pr}] {t.title}{dep_flag}{child_suffix} — {due} ({t.status})"
+                )
                 it = self.task_list.item(self.task_list.count() - 1)
                 it.setData(Qt.ItemDataRole.UserRole, t.id)
                 snip = self._task_search_snippets.get(t.id)
@@ -1993,7 +2025,16 @@ class MainWindow(QMainWindow):
                     tip = snip.replace("**", "")
                     it.setToolTip(tip)
                 else:
-                    it.setToolTip("Blocked by open dependency" if dep_flag else "")
+                    tips: list[str] = []
+                    if dep_flag:
+                        tips.append("Blocked by open dependency")
+                    if child_summary.total:
+                        tips.append(f"Children closed: {child_summary.closed}/{child_summary.total}")
+                    if child_summary.has_overdue_open_child:
+                        tips.append("At least one open child is overdue")
+                    if child_summary.has_blocked_open_child:
+                        tips.append("At least one open child is blocked")
+                    it.setToolTip("\n".join(tips))
             if saved_id is not None:
                 for i in range(self.task_list.count()):
                     it = self.task_list.item(i)
@@ -2021,6 +2062,7 @@ class MainWindow(QMainWindow):
     def _blank_detail_pane(self) -> None:
         self._clear_task_draft()
         self.lbl_ticket.setText("—")
+        self.lbl_parent_task.setText("—")
         self.f_title.clear()
         self.f_description.clear()
         self.task_tags_list.clear()
@@ -2035,6 +2077,8 @@ class MainWindow(QMainWindow):
         self.lbl_next_ms.setText("—")
         self._reload_task_taxonomy_inputs()
         self._attachments_section.refresh(None)
+        if hasattr(self, "children_panel"):
+            self.children_panel.set_children([])
         if hasattr(self, "dependencies_panel"):
             self.dependencies_panel.set_data([], [])
 
@@ -2095,6 +2139,12 @@ class MainWindow(QMainWindow):
         self.lbl_next_ms.setText(
             fmt_date(task.next_milestone_date, fmt) if task.next_milestone_date else "—"
         )
+        if task.parent_task is not None:
+            self.lbl_parent_task.setText(
+                f"{format_task_ticket(task.parent_task.ticket_number)}  {task.parent_task.title}"
+            )
+        else:
+            self.lbl_parent_task.setText("—")
 
         self.todo_list.clear()
         for td in sorted(task.todos, key=lambda x: x.sort_order):
@@ -2117,6 +2167,7 @@ class MainWindow(QMainWindow):
 
         upstream, downstream = self._svc.list_dependencies(task.id)
         self.dependencies_panel.set_data(upstream, downstream)
+        self.children_panel.set_children(self._svc.list_children(task.id))
 
         self.note_list.clear()
         for n in sorted(task.notes, key=lambda x: x.created_at):
@@ -2215,6 +2266,9 @@ class MainWindow(QMainWindow):
 
         new_t = None
         if closing_now:
+            if not self._confirm_close_with_open_children(self._current_task_id):
+                self._notify("Task close cancelled.")
+                return
             _, new_t = self._svc.close_task(
                 self._current_task_id, closed_on=closed_py, resolution=task_resolution
             )
@@ -2248,7 +2302,10 @@ class MainWindow(QMainWindow):
                 self._notify("Task close cancelled: resolution is required.")
                 return
             self.f_resolution.setPlainText(resolution)
-        task, new_t = self._svc.close_task(self._current_task_id, resolution=resolution)
+        if not self._confirm_close_with_open_children(self._current_task_id):
+            self._notify("Task close cancelled.")
+            return
+        _, new_t = self._svc.close_task(self._current_task_id, resolution=resolution)
         msg = "Task closed."
         if new_t:
             msg += f" Created successor {format_task_ticket(new_t.ticket_number)} (id {new_t.id})."
@@ -2468,6 +2525,68 @@ class MainWindow(QMainWindow):
         self._svc.detach_tag_from_task(self._current_task_id, int(tag_id))
         self._load_task_detail()
         self._reload_task_list()
+
+    def _set_parent_for_current_task(self) -> None:
+        if self._current_task_id is None:
+            return
+        include_closed = not self.chk_hide_closed.isChecked()
+        candidates = [
+            ParentCandidate(
+                task_id=int(t.id),
+                ticket_number=t.ticket_number,
+                title=t.title,
+                status=t.status,
+            )
+            for t in self._svc.eligible_parent_tasks(
+                self._current_task_id, include_closed=include_closed
+            )
+        ]
+        if not candidates:
+            self._notify("No eligible parent tasks available.")
+            return
+        parent_id = run_parent_picker_dialog(self, candidates=candidates)
+        if parent_id is None:
+            return
+        try:
+            updated = self._svc.set_parent(self._current_task_id, parent_id)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Parent task", str(exc))
+            return
+        if updated is None:
+            self._notify("Could not set parent task.")
+            return
+        self._load_task_detail()
+        self._reload_task_list()
+
+    def _clear_parent_for_current_task(self) -> None:
+        if self._current_task_id is None:
+            return
+        if self._svc.clear_parent(self._current_task_id) is None:
+            return
+        self._load_task_detail()
+        self._reload_task_list()
+
+    def _jump_to_parent_task(self) -> None:
+        if self._current_task_id is None:
+            return
+        task = self._svc.get_task(self._current_task_id)
+        if task is None or task.parent_task_id is None:
+            return
+        self._jump_to_task_in_tasks_tab(int(task.parent_task_id))
+
+    def _confirm_close_with_open_children(self, task_id: int) -> bool:
+        summary = self._svc.children_summary(task_id)
+        open_children = summary.total - summary.closed
+        if open_children <= 0:
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Close parent task?",
+            f"This task still has {open_children} open child task(s). Close only the parent?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
 
     def _add_dependency_from_panel(self) -> None:
         if self._current_task_id is None:

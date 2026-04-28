@@ -83,6 +83,8 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 - **Priority:** ServiceNow-style P1–P5 from impact and urgency.
 - **Taxonomy:** Category → sub-category → area (per vault reference data).
 - **People:** “For person” from vault people master data.
+- **Parent / child tasks:** Optional `parent_task_id` creates a shallow two-level hierarchy only. A task can have children or be a child, but not both; grandchildren are rejected. Parent selection uses the same searchable picker pattern as dependencies and respects the Tasks-tab closed-task visibility toggle.
+- **Close behavior with children:** Closing a parent does not cascade. If open children remain, the UI warns and asks for confirmation before closing just the parent.
 
 **UI:** Task editor on the Tasks tab; calendar-driven open from Calendar tab.
 
@@ -142,10 +144,11 @@ When a plan ships user-visible behavior, update **this file** in the same PR as
 
 ---
 
-## Tags and dependencies
+## Tags, dependencies, and child tasks
 
 - **Tags:** Free-form labels that cut across category/area routing. Manage under Settings, attach from task detail, and filter in the Tasks tab.
 - **Dependencies:** Explicit task links (`blocked by` / `blocking`) with cycle protection; open upstream dependencies show a list indicator and can be jumped to from task detail.
+- **Children panel / rollups:** Parent tasks show a **Children** section with child rows (status, due, priority, done). Tasks list rows show compact child rollups only when a task has children: `closed/total`, plus overdue or blocked child signals when present.
 
 ---
 
@@ -204,7 +207,7 @@ All below are under the **Settings** menu unless noted.
 
 | Item | Purpose |
 |------|---------|
-| Customize task panel layout… | Reorder inline sections (Todos, Blockers, Recurring) and tabs (Notes, Activity). Per vault → `ui_settings.json`. |
+| Customize task panel layout… | Reorder inline sections (Todos, Children, Dependencies, Blockers, Recurring, Attachments) and tabs (Notes, Activity). Per vault → `ui_settings.json`. |
 | Keyboard shortcuts… | New Task, Save Task, Close Task; quick capture global hotkey (Windows), tray options, default capture I/U/area/person. |
 | Date format… | Display-only format across UI (pickers, lists, reports, bulk-shift preview). Exports stay ISO. |
 | Display timezone… | How dates/times are interpreted for display. |

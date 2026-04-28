@@ -436,6 +436,14 @@ def _like_pattern(needle: str) -> str:
 _UNSET = object()
 
 
+@dataclass(frozen=True)
+class ChildrenSummary:
+    total: int
+    closed: int
+    has_overdue_open_child: bool
+    has_blocked_open_child: bool
+
+
 class TaskService:
     ATTACHMENT_SOFT_CAP_BYTES: int = 100 * 1024 * 1024
 
@@ -671,6 +679,117 @@ class TaskService:
                 return True
         return False
 
+    def _ancestor_ids(self, task_id: int) -> set[int]:
+        seen: set[int] = set()
+        cur = self.session.get(Task, task_id)
+        while cur is not None and cur.parent_task_id is not None:
+            pid = int(cur.parent_task_id)
+            if pid in seen:
+                break
+            seen.add(pid)
+            cur = self.session.get(Task, pid)
+        return seen
+
+    def _descendant_ids(self, task_id: int) -> set[int]:
+        seen: set[int] = set()
+        stack = [int(task_id)]
+        while stack:
+            cur = stack.pop()
+            kids = self.session.scalars(select(Task.id).where(Task.parent_task_id == cur)).all()
+            for kid in kids:
+                kid_i = int(kid)
+                if kid_i in seen:
+                    continue
+                seen.add(kid_i)
+                stack.append(kid_i)
+        return seen
+
+    def list_children(self, task_id: int) -> list[Task]:
+        q = (
+            select(Task)
+            .where(Task.parent_task_id == task_id)
+            .options(selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category))
+            .options(selectinload(Task.person))
+            .order_by(Task.ticket_number.is_(None), Task.ticket_number, Task.due_date.is_(None), Task.due_date, Task.priority, Task.title)
+        )
+        return list(self.session.scalars(q).unique().all())
+
+    def children_summary(self, task_id: int) -> ChildrenSummary:
+        kids = self.list_children(task_id)
+        today = dt.date.today()
+        total = len(kids)
+        closed = sum(1 for t in kids if t.status == TaskStatus.CLOSED)
+        has_overdue_open_child = any(
+            t.status != TaskStatus.CLOSED and t.due_date is not None and t.due_date < today
+            for t in kids
+        )
+        has_blocked_open_child = any(
+            t.status == TaskStatus.BLOCKED for t in kids if t.status != TaskStatus.CLOSED
+        )
+        return ChildrenSummary(
+            total=total,
+            closed=closed,
+            has_overdue_open_child=has_overdue_open_child,
+            has_blocked_open_child=has_blocked_open_child,
+        )
+
+    def set_parent(self, task_id: int, parent_task_id: int | None) -> Task | None:
+        task = self.session.get(Task, task_id)
+        if task is None:
+            return None
+        if parent_task_id is None:
+            if task.parent_task_id is not None:
+                _log_change(self.session, task.id, "parent_task_id", task.parent_task_id, None)
+                task.parent_task_id = None
+                self.session.commit()
+                self.session.refresh(task)
+            return task
+        parent = self.session.get(Task, parent_task_id)
+        if parent is None:
+            return None
+        if task.id == parent.id:
+            raise ValueError("A task cannot be its own parent.")
+        if parent.id in self._descendant_ids(task.id):
+            raise ValueError("Parent selection would create a cycle.")
+        # Max depth 2: a child cannot itself be a parent, and a parent cannot itself be a child.
+        if task.parent_task_id is not None and int(task.parent_task_id) != int(parent_task_id):
+            raise ValueError("Grandchildren are not allowed (max depth is 2).")
+        if parent.parent_task_id is not None:
+            raise ValueError("Selected parent is already a child; grandchildren are not allowed.")
+        if self.session.scalar(select(Task.id).where(Task.parent_task_id == task.id).limit(1)) is not None:
+            raise ValueError("This task already has children and cannot become a child itself.")
+        if task.parent_task_id != parent.id:
+            _log_change(self.session, task.id, "parent_task_id", task.parent_task_id, parent.id)
+            task.parent_task_id = parent.id
+            self.session.commit()
+            self.session.refresh(task)
+        return task
+
+    def clear_parent(self, task_id: int) -> Task | None:
+        return self.set_parent(task_id, None)
+
+    def eligible_parent_tasks(
+        self,
+        task_id: int,
+        *,
+        include_closed: bool,
+    ) -> list[Task]:
+        descendants = self._descendant_ids(task_id)
+        current = self.session.get(Task, task_id)
+        rows = self.list_tasks(include_closed=include_closed)
+        out: list[Task] = []
+        for row in rows:
+            if row.id == task_id:
+                continue
+            if row.id in descendants:
+                continue
+            if row.parent_task_id is not None:
+                continue
+            if current is not None and current.parent_task_id is not None and row.id != current.parent_task_id:
+                continue
+            out.append(row)
+        return out
+
     @staticmethod
     def _safe_attachment_filename(orig: str) -> str:
         name = Path(orig).name.strip()
@@ -795,6 +914,8 @@ class TaskService:
         q: Select[tuple[Task]] = select(Task).options(
             selectinload(Task.todos),
             selectinload(Task.tags),
+            selectinload(Task.child_tasks),
+            selectinload(Task.parent_task),
             selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
             selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),
             selectinload(Task.person),
@@ -949,6 +1070,8 @@ class TaskService:
             .options(
                 selectinload(Task.todos),
                 selectinload(Task.tags),
+                selectinload(Task.child_tasks),
+                selectinload(Task.parent_task),
                 selectinload(Task.recurring_rule).selectinload(RecurringRule.todo_templates),
                 selectinload(Task.area).selectinload(TaskArea.subcategory).selectinload(TaskSubCategory.category),
                 selectinload(Task.person),
@@ -978,6 +1101,8 @@ class TaskService:
             .options(
                 selectinload(Task.todos),
                 selectinload(Task.tags),
+                selectinload(Task.child_tasks),
+                selectinload(Task.parent_task),
                 selectinload(Task.notes).selectinload(TaskNote.versions),
                 selectinload(Task.blockers),
                 selectinload(Task.dependencies_incoming).selectinload(TaskDependency.blocker_task),
@@ -995,6 +1120,8 @@ class TaskService:
         if not task:
             return False
         tid = task.id
+        for child in self.session.scalars(select(Task).where(Task.parent_task_id == tid)).all():
+            child.parent_task_id = None
         self.session.delete(task)
         self.session.flush()
         sync_task_search_fts(self.session, tid)

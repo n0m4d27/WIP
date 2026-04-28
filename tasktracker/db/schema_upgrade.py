@@ -81,6 +81,8 @@ def upgrade_schema(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN person_id INTEGER"))
         if "resolution" not in col_names:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN resolution TEXT"))
+        if "parent_task_id" not in col_names:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER"))
         conn.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_tasks_ticket_number_unique "
@@ -89,6 +91,7 @@ def upgrade_schema(engine: Engine) -> None:
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_area_id ON tasks(area_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_person_id ON tasks(person_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_parent_task_id ON tasks(parent_task_id)"))
         conn.execute(
             text(
                 """

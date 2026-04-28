@@ -81,8 +81,8 @@ ul { padding-left: 1.2em; }
 <h2>Tasks</h2>
 <ul>
 <li><b>New Task</b> (title, received, due), <b>Save Task</b> (persist the detail form), <b>Close Task</b> (close + on-close recurrence if configured) — toolbar, <b>Task actions</b> row at the top of the detail pane, and shortcuts (defaults Ctrl+N, Ctrl+S, Ctrl+Shift+C; change under Settings). Closing now requires a task resolution note.</li>
-<li><b>Two-column detail layout</b> — the core fields are split for readability: the <i>left</i> column (wider) holds Ticket, Title, a combined Status / Impact / Urgency / Priority row, Description, and a task <b>Resolution</b> note; the <i>right</i> column holds Received, Due, Closed, Category, Sub-category, Area, For person, and Next milestone.</li>
-<li><b>Inline sections vs. tabs</b> — below the core fields, <b>Todos</b>, <b>Blockers</b>, <b>Recurring</b>, and <b>Attachments</b> stay visible inline as stacked group boxes by default; <b>Notes</b> and <b>Activity</b> share a tab strip that fills the remaining vertical space, so long histories or rich notes no longer push everything else off-screen. You can reorder both groups under <b>Settings → Customize task panel layout…</b>.</li>
+<li><b>Two-column detail layout</b> — the core fields are split for readability: the <i>left</i> column (wider) holds Ticket, Title, a combined Status / Impact / Urgency / Priority row, Description, and a task <b>Resolution</b> note; the <i>right</i> column holds Received, Due, Closed, Category, Sub-category, Area, For person, <b>Parent</b>, and Next milestone.</li>
+<li><b>Inline sections vs. tabs</b> — below the core fields, <b>Todos</b>, <b>Children</b>, <b>Dependencies</b>, <b>Blockers</b>, <b>Recurring</b>, and <b>Attachments</b> stay visible inline as stacked group boxes by default; <b>Notes</b> and <b>Activity</b> share a tab strip that fills the remaining vertical space, so long histories or rich notes no longer push everything else off-screen. You can reorder both groups under <b>Settings → Customize task panel layout…</b>.</li>
 <li><b>Blank dates</b> — Due and Closed date boxes stay blank until you set them; use the <b>Today</b> button to fill with today's date or <b>Clear</b> to empty them again. A blank date saves as "no date" (it does not default to today).</li>
 <li><b>Category / Sub-category / Area</b> — choose vault-specific taxonomy values for each task (Area is the task-level assignment; category/sub-category reflect that hierarchy).</li>
 <li><b>For person</b> — optional attribution for who the task is for (first name, last name, employee ID).</li>
@@ -96,6 +96,10 @@ ul { padding-left: 1.2em; }
   The app does not auto-flip between <b>Open</b> and <b>In progress</b>; you set status when you save the task (except clearing the last blocker may move status off <code>blocked</code>). Finer rules can be added later.</li>
 <li><b>Resolution required on close</b> — when status transitions to <b>Closed</b>, enter a short final resolution note. The app blocks close actions (including the Close Task shortcut/button) until a resolution is provided.</li>
 <li><b>Next milestone</b> — derived from the first <i>open</i> todo (in list order) that has a milestone date.</li>
+<li><b>Parent / child tasks</b> — use <b>Set parent…</b> on a task to attach it under another task. The picker is searchable by ticket number, title, or status and follows the same closed-task visibility rule as the dependency picker: closed candidates appear only when <b>Hide closed tasks</b> is off on the Tasks tab. Use <b>Clear</b> to remove the parent or <b>Jump</b> to open it.</li>
+<li><b>Hierarchy rule</b> — the app allows only one level of children. A task can be a parent or a child, but not both; cycle-causing or grandchild-style selections are blocked before save.</li>
+<li><b>Closing a parent</b> — if open children still exist, closing the parent shows a confirmation warning. Child tasks remain unchanged; the close action does <i>not</i> cascade.</li>
+<li><b>Tasks-list rollups</b> — parent rows show compact child progress in the task list (<code>closed/total children</code>) and add quick signals when any open child is overdue or blocked.</li>
 </ul>
 
 <h2>Todos</h2>
@@ -117,11 +121,12 @@ ul { padding-left: 1.2em; }
 <li>Separate blocker rows; clearing a blocker may move status off <code>blocked</code> when none remain open.</li>
 </ul>
 
-<h2>Tags and dependencies</h2>
+<h2>Tags, dependencies, and child tasks</h2>
 <ul>
 <li><b>Tags</b> — lightweight labels for cross-cutting work (for example, <code>#q1-planning</code>). Add/remove tags from the task detail pane and manage the master list under <b>Settings → Manage tags…</b>. Use <b>Tag filter</b> on the Tasks tab to narrow the list.</li>
 <li><b>Dependencies</b> — use the <b>Dependencies</b> section on the task panel to link tasks as <i>blocked by</i> or <i>blocking</i>. The app prevents cycles, and <b>Jump to task</b> opens the linked task quickly.</li>
 <li><b>List indicator</b> — tasks blocked by at least one still-open upstream dependency show a small chain marker in the Tasks list.</li>
+<li><b>Children section</b> — parent tasks show a small table of child rows with task number/title, status, due date, priority, and whether the child is closed. Double-click a child row (or use <b>Jump to child</b>) to open it on the Tasks tab.</li>
 </ul>
 
 <h2>Recurring</h2>
@@ -239,7 +244,7 @@ ul { padding-left: 1.2em; }
 
 <h2>Settings</h2>
 <ul>
-<li><b>Customize task panel layout…</b> — reorder the sections below the core task fields. The dialog has two independently-reorderable groups: <b>Inline sections</b> (Todos, Blockers, Recurring, Attachments — stacked below the core fields) and <b>Tabs</b> (Notes, Activity — share a tab strip). Saved per vault in <code>ui_settings.json</code>.</li>
+<li><b>Customize task panel layout…</b> — reorder the sections below the core task fields. The dialog has two independently-reorderable groups: <b>Inline sections</b> (Todos, Children, Dependencies, Blockers, Recurring, Attachments — stacked below the core fields) and <b>Tabs</b> (Notes, Activity — share a tab strip). Saved per vault in <code>ui_settings.json</code>.</li>
 <li><b>Display timezone…</b> — IANA zone or <b>local</b> for timestamps in activity-style surfaces.</li>
 <li><b>Text size…</b> — interface scale multiplier.</li>
 <li><b>Task templates…</b> — manage reusable new-task shapes (see <b>Task templates</b> above).</li>
