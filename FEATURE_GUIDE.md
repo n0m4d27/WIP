@@ -226,7 +226,7 @@ All below are under the **Settings** menu unless noted.
 
 ## Roadmap features (not in this catalog until shipped)
 
-Items covered by `plans/06_*.md` onward (tags, child tasks, effort/time, external links, inbox actions, reminders/aging, board, intake, safety net) should be added **here** when their plan lands, alongside `user_guide.html` and `tech_decisions.md`.
+Items covered by `plans/08_*.md` onward (effort/time, external links, inbox actions, reminders/aging, board, intake, safety net) should be added **here** when their plan lands, alongside `user_guide.html` and `tech_decisions.md`.
 
 ---
 

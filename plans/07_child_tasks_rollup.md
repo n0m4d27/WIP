@@ -71,54 +71,54 @@ indicators so a parent reflects the state of its children at a glance.
 
 ## Work breakdown
 
-- [ ] Schema upgrade + model.
-- [ ] Service methods: `set_parent`, `clear_parent`, `list_children`,
+- [x] Schema upgrade + model.
+- [x] Service methods: `set_parent`, `clear_parent`, `list_children`,
       `children_summary`.
-- [ ] Enforce depth <= 2 and no cycles.
-- [ ] Parent picker widget using the searchable dialog pattern from plan
+- [x] Enforce depth <= 2 and no cycles.
+- [x] Parent picker widget using the searchable dialog pattern from plan
       06-01.
-- [ ] Candidate rules for the picker:
+- [x] Candidate rules for the picker:
       - exclude the current task
       - exclude descendants / any cycle-causing choice
       - enforce depth <= 2 before the user can pick
       - include or exclude closed tasks based on the same hide/show-closed
         behavior the dependency picker follows
-- [ ] Children panel on task detail (inline or tab per layout placement).
-- [ ] Rollup badges on Tasks list rows.
-- [ ] Close-parent-with-open-children warning flow.
-- [ ] Dashboard / reports review: confirm existing queries don't
+- [x] Children panel on task detail (inline or tab per layout placement).
+- [x] Rollup badges on Tasks list rows.
+- [x] Close-parent-with-open-children warning flow.
+- [x] Dashboard / reports review: confirm existing queries don't
       double-count. Update as needed.
-- [ ] Tests: happy path, cycle prevention, depth guard, delete-parent
+- [x] Tests: happy path, cycle prevention, depth guard, delete-parent
       nulls children, rollup accuracy.
 
 ## Validation checklist
 
-- [ ] Setting a child's parent and then deleting the parent nulls
+- [x] Setting a child's parent and then deleting the parent nulls
       `parent_task_id` on the child; child is not deleted.
-- [ ] Making A parent of B, then attempting to make B parent of A, is
+- [x] Making A parent of B, then attempting to make B parent of A, is
       rejected.
-- [ ] Attempting to create a grandchild (A parent of B, B parent of C) is
+- [x] Attempting to create a grandchild (A parent of B, B parent of C) is
       rejected with a clear error.
-- [ ] With many tasks (50+), the parent picker narrows correctly by title or
+- [x] With many tasks (50+), the parent picker narrows correctly by title or
       ticket text and remains usable.
-- [ ] Closed tasks appear in the parent picker only when the user has chosen
+- [x] Closed tasks appear in the parent picker only when the user has chosen
       to show closed tasks in the Tasks-tab context, matching the behavior
       built in plan 06-01.
-- [ ] Rollup badge on A shows "2 / 5 closed" when 2 of 5 children are
+- [x] Rollup badge on A shows "2 / 5 closed" when 2 of 5 children are
       closed; flips to overdue-flag when any open child is past due.
-- [ ] Closing a parent with open children surfaces the warning and does not
+- [x] Closing a parent with open children surfaces the warning and does not
       silently close children.
-- [ ] Existing reports (WIP aging, throughput, workload) remain accurate —
+- [x] Existing reports (WIP aging, throughput, workload) remain accurate —
       double-counting is avoided where meaningful.
-- [ ] Existing test suite green.
+- [x] Existing test suite green.
 
 ## Docs to update on landing
 
-- [ ] `tech_decisions.md` — max depth of 2, cycle policy, cascade behavior.
-- [ ] `tasktracker/resources/user_guide.html` — "Parent and child tasks"
+- [x] `tech_decisions.md` — max depth of 2, cycle policy, cascade behavior.
+- [x] `tasktracker/resources/user_guide.html` — "Parent and child tasks"
       section.
-- [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
-- [ ] `FEATURE_GUIDE.md` — parent/child tasks and rollup rules.
+- [x] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `FEATURE_GUIDE.md` — parent/child tasks and rollup rules.
 
 ## Risks / open questions
 

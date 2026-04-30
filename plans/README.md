@@ -33,7 +33,10 @@ behavior — in the same pass as the user guide and plan checkboxes.
    - Mark the row below as `Done` with `Finished` date.
    - Append a short decision note in `../tech_decisions.md`.
    - Move discovered follow-ups to the [Follow-ups discovered](#follow-ups-discovered) table.
-5. **If you hit bugs during rollout**, log them in
+5. **No git commands in this workflow.** Do not use git commands as part of
+   implementing or documenting plans; treat repository state changes as managed
+   outside these execution steps.
+6. **If you hit bugs during rollout**, log them in
    [Bugs caught during rollout](#bugs-caught-during-rollout) rather than
    silently fixing and forgetting — the log is cheap insurance if a regression
    comes back later.
@@ -47,7 +50,7 @@ behavior — in the same pass as the user guide and plan checkboxes.
 | 03 | [Task templates](03_task_templates.md)                             | 1    | Done        | 2026-04-23 | 2026-04-23 | Templates + JSON I/O; New from template… draft then Save; `delete_task` for FTS. |
 | 04 | [Attachments](04_attachments.md)                                   | 1    | Done        | 2026-04-23 | 2026-04-23 | Per-file Fernet `.enc` at rest; `task_attachments`; inline section + temp open. |
 | 05 | [Quick capture](05_quick_capture.md)                               | 1    | Done        | 2026-04-23 | 2026-04-23 | Tray + Win32 global hotkey (ctypes); opt-in run-in-tray; `quick_capture` in `ui_settings.json`. |
-| 06 | [Tags and task dependencies](06_tags_and_dependencies.md)          | 2    | Not started |            |            |       |
+| 06 | [Tags and task dependencies](06_tags_and_dependencies.md)          | 2    | Done        | 2026-04-28 | 2026-04-28 | Tags CRUD + task tag filtering, dependencies with cycle guard, dependency/parent searchable picker pattern, and blocked-upstream list indicator shipped. |
 | 07 | [Child tasks and rollup](07_child_tasks_rollup.md)                 | 2    | Done        | 2026-04-28 | 2026-04-28 | Parent/child links, searchable parent picker, children panel, list rollups, and close-parent warning shipped. |
 | 08 | [Effort, time log, daily review](08_effort_and_time_log.md)        | 2    | Not started |            |            |       |
 | 09 | [External links](09_external_links.md)                             | 2    | Not started |            |            |       |

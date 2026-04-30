@@ -84,39 +84,39 @@ cleanly express today:
 
 ## Work breakdown
 
-- [ ] Tag model + upgrade + service CRUD.
-- [ ] Task-tag attach / detach service + tests.
-- [ ] Tags dialog (Settings) with merge (one tag absorbs another's
+- [x] Tag model + upgrade + service CRUD.
+- [x] Task-tag attach / detach service + tests.
+- [x] Tags dialog (Settings) with merge (one tag absorbs another's
       attachments).
-- [ ] Tag chips on task panel with inline add / remove.
-- [ ] Tag filter in the Tasks tab search bar.
-- [ ] Dependency model + upgrade + service CRUD with cycle guard.
-- [ ] Dependencies panel on task detail.
-- [ ] Badge / tooltip on tasks blocked by open upstream deps.
-- [ ] FTS integration (plan 02) sees task title + description; tags are
+- [x] Tag chips on task panel with inline add / remove.
+- [x] Tag filter in the Tasks tab search bar.
+- [x] Dependency model + upgrade + service CRUD with cycle guard.
+- [x] Dependencies panel on task detail.
+- [x] Badge / tooltip on tasks blocked by open upstream deps.
+- [x] FTS integration (plan 02) sees task title + description; tags are
       filtered separately at SQL level. Keep search paths clean.
-- [ ] JSON export / import for tags (match reference-data shape).
-- [ ] Tests covering all above.
+- [x] JSON export / import for tags (match reference-data shape).
+- [x] Tests covering all above.
 
 ## Validation checklist
 
-- [ ] Creating a cycle A->B->A raises the expected error and is not
+- [x] Creating a cycle A->B->A raises the expected error and is not
       persisted.
-- [ ] Deleting a task cascades to its `task_tags` and dependency rows.
-- [ ] Merging tag A into B reassigns all `task_tags` rows from A to B without
+- [x] Deleting a task cascades to its `task_tags` and dependency rows.
+- [x] Merging tag A into B reassigns all `task_tags` rows from A to B without
       duplicates, then deletes A.
-- [ ] Filtering by a tag returns exactly tasks holding that tag.
-- [ ] "Blocked by open upstream" indicator flips when the upstream closes.
-- [ ] JSON import is idempotent.
-- [ ] Existing test suite green.
+- [x] Filtering by a tag returns exactly tasks holding that tag.
+- [x] "Blocked by open upstream" indicator flips when the upstream closes.
+- [x] JSON import is idempotent.
+- [x] Existing test suite green.
 
 ## Docs to update on landing
 
-- [ ] `tech_decisions.md` — tag model, dependency semantics, cycle policy.
-- [ ] `tasktracker/resources/user_guide.html` — Tags section and Dependencies
+- [x] `tech_decisions.md` — tag model, dependency semantics, cycle policy.
+- [x] `tasktracker/resources/user_guide.html` — Tags section and Dependencies
       section.
-- [ ] `plans/README.md` — mark Done, log follow-ups / bugs.
-- [ ] `FEATURE_GUIDE.md` — tags + dependencies model and surfaces.
+- [x] `plans/README.md` — mark Done, log follow-ups / bugs.
+- [x] `FEATURE_GUIDE.md` — tags + dependencies model and surfaces.
 
 ## Risks / open questions
 
